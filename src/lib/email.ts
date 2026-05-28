@@ -137,8 +137,8 @@ export function buildEmailHtml(params: {
     </td></tr>
   </table>
 
-  <!-- Tracking pixel (1×1 transparent) -->
-  <img src="${pixelUrl}" width="1" height="1" alt="" style="display:block;border:0;opacity:0;position:absolute;pointer-events:none" />
+  <!-- Tracking pixel (1×1 transparent GIF) -->
+  <img src="${pixelUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;min-height:1px" />
 </body>
 </html>`;
 }

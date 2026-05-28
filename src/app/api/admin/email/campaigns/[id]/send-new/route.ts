@@ -41,11 +41,12 @@ export async function POST(
                                'partial';
 
     await updateEmailCampaign(campaign.id, {
-      status:      finalStatus,
-      sentCount:   newSent,
-      failedCount: newFailed,
-      errorSummary: result.errors.length ? result.errors.slice(0, 3).join(' | ') : null,
-      sentAt: campaign.sentAt ?? new Date().toISOString(),
+      status:          finalStatus,
+      sentCount:       newSent,
+      failedCount:     newFailed,
+      totalRecipients: newTotal,
+      errorSummary:    result.errors.length ? result.errors.slice(0, 3).join(' | ') : null,
+      sentAt:          campaign.sentAt ?? new Date().toISOString(),
     });
 
     return NextResponse.json({

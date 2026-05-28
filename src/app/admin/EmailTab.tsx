@@ -377,17 +377,30 @@ function CampaignStatsPanel({ campaign }: { campaign: Campaign }) {
   const [stats, setStats]         = useState<Stats | null>(null);
   const [queue, setQueue]         = useState<QueueSummary | null>(null);
   const [loading, setLoading]     = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError]         = useState<string | null>(null);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
-  useEffect(() => {
-    setLoading(true);
-    fetch(`/api/admin/email/campaigns/${campaign.id}`)
+  const fetchStats = useCallback((silent = false) => {
+    if (!silent) setLoading(true);
+    else setRefreshing(true);
+    return fetch(`/api/admin/email/campaigns/${campaign.id}`)
       .then(r => r.json())
-      .then(d => { setStats(d.stats ?? null); setQueue(d.queue ?? null); setLoading(false); })
-      .catch(e => { setError(String(e)); setLoading(false); });
+      .then(d => {
+        setStats(d.stats ?? null);
+        setQueue(d.queue ?? null);
+        setLastRefreshed(new Date());
+      })
+      .catch(e => setError(String(e)))
+      .finally(() => { setLoading(false); setRefreshing(false); });
   }, [campaign.id]);
 
-  const base = campaign.sentCount > 0 ? campaign.sentCount : campaign.totalRecipients;
+  useEffect(() => { fetchStats(); }, [fetchStats]);
+
+  // Cap delivered at totalRecipients — sentCount can exceed it when send-new ran
+  // multiple times before the totalRecipients counter was being saved correctly.
+  const deliveredCount = Math.min(campaign.sentCount, campaign.totalRecipients);
+  const base = deliveredCount > 0 ? deliveredCount : campaign.totalRecipients;
 
   const METRICS = [
     {
@@ -399,8 +412,8 @@ function CampaignStatsPanel({ campaign }: { campaign: Campaign }) {
     },
     {
       label: "Delivered",
-      value: campaign.sentCount,
-      sub: campaign.sentCount === 0 ? "Not dispatched yet" : `${pct(campaign.sentCount, campaign.totalRecipients)}% of recipients`,
+      value: deliveredCount,
+      sub: deliveredCount === 0 ? "Not dispatched yet" : `${pct(deliveredCount, campaign.totalRecipients)}% of recipients`,
       color: "bg-[#003368]",
       pctOf: campaign.totalRecipients,
     },
@@ -443,6 +456,18 @@ function CampaignStatsPanel({ campaign }: { campaign: Campaign }) {
 
   return (
     <div className="px-5 pb-5 pt-3 bg-slate-50 border-t border-slate-200 space-y-5">
+
+      {/* Refresh bar */}
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] text-slate-400">
+          {lastRefreshed ? `Updated ${lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "Loading…"}
+        </span>
+        <button onClick={() => fetchStats(true)} disabled={refreshing}
+          className="flex items-center gap-1 text-xs font-semibold text-[#003368] hover:text-[#002244] disabled:opacity-50 transition-colors">
+          <RefreshCw className={`w-3 h-3 ${refreshing ? "animate-spin" : ""}`} />
+          Refresh
+        </button>
+      </div>
 
       {isDraft && (
         <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -1192,7 +1217,7 @@ export default function EmailTab() {
           <div className="rounded-xl border border-slate-200 overflow-hidden">
             {campaigns.map((c, idx) => {
               const isExpanded = expandedId === c.id;
-              const base = c.sentCount > 0 ? c.sentCount : c.totalRecipients;
+              const base = Math.min(c.sentCount > 0 ? c.sentCount : c.totalRecipients, c.totalRecipients);
               const openRate = pct(c.uniqueOpenCount, base);
 
               return (

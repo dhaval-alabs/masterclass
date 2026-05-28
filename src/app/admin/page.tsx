@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, LogOut, UploadCloud, Plus, Trash2, ArrowUp, ArrowDown, Settings, Video, Star, ListOrdered, HelpCircle, Layers, Users, UserCog, Mail } from "lucide-react";
+import { Loader2, LogOut, UploadCloud, Plus, Trash2, ArrowUp, ArrowDown, Settings, Video, Star, ListOrdered, HelpCircle, Layers, Users, UserCog, Mail, MessageSquare } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import TeamTab from "./TeamTab";
 import SessionsTab from "./SessionsTab";
 import EmailTab from "./EmailTab";
+import WhatsAppTab from "./WhatsAppTab";
 
 type FaqItem = { id: string; q: string; a: string; order: number };
 type FeatureItem = { id: string; icon: string | null; title: string; description: string; accent: string | null; sortOrder: number };
@@ -72,7 +73,7 @@ type WebinarConfig = {
   genericBrochureUrl: string | null; genericBrochureCta: string | null;
 };
 
-type AdminTab = 'settings' | 'webinar' | 'features' | 'agenda' | 'registrations' | 'faqs' | 'team' | 'sessions' | 'email';
+type AdminTab = 'settings' | 'webinar' | 'features' | 'agenda' | 'registrations' | 'faqs' | 'team' | 'sessions' | 'email' | 'whatsapp';
 
 export default function AdminPortal() {
   const router = useRouter();
@@ -562,6 +563,7 @@ export default function AdminPortal() {
     { key: 'sessions',      label: 'Sessions',       icon: <Layers        className="w-4 h-4" /> },
     { key: 'registrations', label: 'Registrations',  icon: <Users         className="w-4 h-4" /> },
     { key: 'email',         label: 'Emails',         icon: <Mail          className="w-4 h-4" /> },
+    { key: 'whatsapp',      label: 'WhatsApp',       icon: <MessageSquare className="w-4 h-4" /> },
     { key: 'team',          label: 'Team',           icon: <UserCog       className="w-4 h-4" /> },
   ];
 
@@ -1482,6 +1484,7 @@ export default function AdminPortal() {
 
           {/* Email Tab */}
           {activeTab === "email" && <EmailTab />}
+          {activeTab === "whatsapp" && <WhatsAppTab />}
 
         </div>
       </main>

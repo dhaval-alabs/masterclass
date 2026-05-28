@@ -2081,28 +2081,35 @@ export async function recordEmailOpen(campaignId: string, recipientHash: string)
     .from('email_events')
     .insert({ campaign_id: campaignId, event_type: 'open', recipient_hash: recipientHash });
 
-  // Increment counters atomically via rpc (fallback: read-modify-write).
-  const inc: Record<string, number> = { open_count: 1 };
-  if (isFirstOpen) inc.unique_open_count = 1;
-
-  // Use a raw SQL expression through .rpc or a manual read-modify-write.
-  const { data: current } = await supabase
-    .schema('excel_to_ai')
-    .from('email_campaigns')
-    .select('open_count, unique_open_count')
-    .eq('id', campaignId)
-    .maybeSingle();
-
-  if (current) {
-    await supabase
-      .schema('excel_to_ai')
-      .from('email_campaigns')
-      .update({
-        open_count: ((current as Record<string, number>).open_count ?? 0) + 1,
-        unique_open_count: ((current as Record<string, number>).unique_open_count ?? 0) + (isFirstOpen ? 1 : 0),
-      })
-      .eq('id', campaignId);
-  }
+  // Atomic increment via raw SQL to avoid race conditions on concurrent opens.
+  const uniqueInc = isFirstOpen ? 1 : 0;
+  await supabase.rpc('increment_email_open_counts', {
+    p_campaign_id: campaignId,
+    p_open_inc: 1,
+    p_unique_inc: uniqueInc,
+  }).then(({ error }) => {
+    if (error) {
+      // rpc not available — fall back to read-modify-write.
+      return supabase
+        .schema('excel_to_ai')
+        .from('email_campaigns')
+        .select('open_count, unique_open_count')
+        .eq('id', campaignId)
+        .maybeSingle()
+        .then(({ data: current }) => {
+          if (!current) return;
+          const c = current as Record<string, number>;
+          return supabase
+            .schema('excel_to_ai')
+            .from('email_campaigns')
+            .update({
+              open_count:        (c.open_count        ?? 0) + 1,
+              unique_open_count: (c.unique_open_count ?? 0) + uniqueInc,
+            })
+            .eq('id', campaignId);
+        });
+    }
+  });
 }
 
 export interface EmailEventStats {
@@ -2364,4 +2371,233 @@ export async function updateEmailSettings(settings: Partial<EmailSettings>): Pro
     .update(row)
     .eq('singleton', true);
   if (error) throw error;
+}
+
+// ── WhatsApp campaigns ────────────────────────────────────────────────────────
+
+export interface WhatsAppCampaign {
+  id: string;
+  sessionId: string | null;
+  templateName: string;
+  languageCode: string;
+  audience: 'verified' | 'unverified' | 'all';
+  variables: string[];
+  status: 'draft' | 'sending' | 'sent' | 'partial' | 'failed';
+  totalRecipients: number;
+  sentCount: number;
+  failedCount: number;
+  errorSummary: string | null;
+  createdAt: string;
+  sentAt: string | null;
+}
+
+function mapWhatsAppCampaign(r: Record<string, unknown>): WhatsAppCampaign {
+  return {
+    id:               r.id as string,
+    sessionId:        (r.session_id as string | null) ?? null,
+    templateName:     r.template_name as string,
+    languageCode:     r.language_code as string,
+    audience:         r.audience as WhatsAppCampaign['audience'],
+    variables:        (r.variables as string[]) ?? [],
+    status:           r.status as WhatsAppCampaign['status'],
+    totalRecipients:  (r.total_recipients as number) ?? 0,
+    sentCount:        (r.sent_count as number) ?? 0,
+    failedCount:      (r.failed_count as number) ?? 0,
+    errorSummary:     (r.error_summary as string | null) ?? null,
+    createdAt:        r.created_at as string,
+    sentAt:           (r.sent_at as string | null) ?? null,
+  };
+}
+
+export async function createWhatsAppCampaign(params: {
+  sessionId?: string | null;
+  templateName: string;
+  languageCode: string;
+  audience: 'verified' | 'unverified' | 'all';
+  variables: string[];
+  totalRecipients: number;
+  status?: WhatsAppCampaign['status'];
+}): Promise<WhatsAppCampaign> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_campaigns')
+    .insert({
+      session_id:       params.sessionId ?? null,
+      template_name:    params.templateName,
+      language_code:    params.languageCode,
+      audience:         params.audience,
+      variables:        params.variables,
+      total_recipients: params.totalRecipients,
+      status:           params.status ?? 'draft',
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return mapWhatsAppCampaign(data as Record<string, unknown>);
+}
+
+export async function updateWhatsAppCampaign(
+  id: string,
+  updates: Partial<Pick<WhatsAppCampaign, 'status' | 'sentCount' | 'failedCount' | 'errorSummary' | 'sentAt' | 'totalRecipients'>>,
+): Promise<void> {
+  const row: Record<string, unknown> = {};
+  if (updates.status          !== undefined) row.status           = updates.status;
+  if (updates.sentCount       !== undefined) row.sent_count       = updates.sentCount;
+  if (updates.failedCount     !== undefined) row.failed_count     = updates.failedCount;
+  if (updates.errorSummary    !== undefined) row.error_summary    = updates.errorSummary;
+  if (updates.sentAt          !== undefined) row.sent_at          = updates.sentAt;
+  if (updates.totalRecipients !== undefined) row.total_recipients = updates.totalRecipients;
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_campaigns')
+    .update(row)
+    .eq('id', id);
+  if (error) throw error;
+}
+
+export async function listWhatsAppCampaigns(): Promise<WhatsAppCampaign[]> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_campaigns')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  return (data ?? []).map(r => mapWhatsAppCampaign(r as Record<string, unknown>));
+}
+
+export async function getWhatsAppCampaignById(id: string): Promise<WhatsAppCampaign | null> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_campaigns')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return mapWhatsAppCampaign(data as Record<string, unknown>);
+}
+
+// ── WhatsApp opt-outs ──────────────────────────────────────────────────────────
+
+export async function listWhatsAppOptouts(): Promise<{ id: string; phone: string; reason: string | null; addedAt: string }[]> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_optouts')
+    .select('id, phone, reason, added_at')
+    .order('added_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map(r => ({
+    id:      r.id as string,
+    phone:   r.phone as string,
+    reason:  (r.reason as string | null) ?? null,
+    addedAt: r.added_at as string,
+  }));
+}
+
+export async function addWhatsAppOptout(phone: string, reason?: string): Promise<void> {
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_optouts')
+    .upsert({ phone, reason: reason ?? null }, { onConflict: 'phone' });
+  if (error) throw error;
+}
+
+export async function removeWhatsAppOptout(phone: string): Promise<void> {
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_optouts')
+    .delete()
+    .eq('phone', phone);
+  if (error) throw error;
+}
+
+/** Returns the set of opted-out phone numbers (10-digit strings). */
+export async function getWhatsAppOptoutPhones(): Promise<Set<string>> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_optouts')
+    .select('phone');
+  if (error) throw error;
+  return new Set((data ?? []).map(r => r.phone as string));
+}
+
+// ── WhatsApp send log ──────────────────────────────────────────────────────────
+
+export interface WaSendLogEntry {
+  campaignId: string;
+  phone: string;
+  recipientName: string;
+  status: 'sent' | 'failed' | 'skipped';
+  errorDetail?: string;
+  metaMessageId?: string;
+}
+
+export async function bulkCreateWhatsAppSendLog(entries: WaSendLogEntry[]): Promise<void> {
+  if (entries.length === 0) return;
+  const rows = entries.map(e => ({
+    campaign_id:     e.campaignId,
+    phone:           e.phone,
+    recipient_name:  e.recipientName,
+    status:          e.status,
+    error_detail:    e.errorDetail ?? null,
+    meta_message_id: e.metaMessageId ?? null,
+  }));
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_log')
+    .insert(rows);
+  if (error) throw error;
+}
+
+export async function updateWhatsAppSendLogByMessageId(
+  metaMessageId: string,
+  updates: { status: 'delivered' | 'read'; deliveredAt?: string; readAt?: string },
+): Promise<void> {
+  const row: Record<string, unknown> = { status: updates.status };
+  if (updates.deliveredAt !== undefined) row.delivered_at = updates.deliveredAt;
+  if (updates.readAt      !== undefined) row.read_at      = updates.readAt;
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_log')
+    .update(row)
+    .eq('meta_message_id', metaMessageId);
+  if (error) throw error;
+}
+
+export async function getWhatsAppCampaignLogs(
+  campaignId: string,
+): Promise<{ id: string; phone: string; recipientName: string; status: string; errorDetail: string | null; metaMessageId: string | null; sentAt: string; deliveredAt: string | null; readAt: string | null }[]> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_log')
+    .select('id, phone, recipient_name, status, error_detail, meta_message_id, sent_at, delivered_at, read_at')
+    .eq('campaign_id', campaignId)
+    .order('sent_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map(r => ({
+    id:             r.id as string,
+    phone:          r.phone as string,
+    recipientName:  (r.recipient_name as string | null) ?? '',
+    status:         r.status as string,
+    errorDetail:    (r.error_detail as string | null) ?? null,
+    metaMessageId:  (r.meta_message_id as string | null) ?? null,
+    sentAt:         r.sent_at as string,
+    deliveredAt:    (r.delivered_at as string | null) ?? null,
+    readAt:         (r.read_at as string | null) ?? null,
+  }));
+}
+
+/** Count of 'sent' entries in whatsapp_send_log where sent_at >= today UTC midnight. */
+export async function getWhatsAppDailySentCount(): Promise<number> {
+  const todayUtcMidnight = new Date();
+  todayUtcMidnight.setUTCHours(0, 0, 0, 0);
+  const { count, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_log')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'sent')
+    .gte('sent_at', todayUtcMidnight.toISOString());
+  if (error) throw error;
+  return count ?? 0;
 }
