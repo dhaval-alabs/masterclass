@@ -80,6 +80,7 @@ export async function POST(req: NextRequest) {
           firstName: name ? name.split(' ')[0] : undefined,
           lastName: name && name.split(' ').length > 1 ? name.split(' ').slice(1).join(' ') : undefined,
           city: city ?? undefined,
+          externalId: registrationId ?? undefined,
           clientIp: clientCtx.ip,
           clientUserAgent: clientCtx.userAgent,
         },

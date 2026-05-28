@@ -30,7 +30,7 @@ const QUESTION_OPTIONS: readonly string[][] = [
   ['Working full-time', 'Working part-time', 'Studying', 'Between jobs'],
   ['Switch to data career', 'Upskill / get promoted', 'Business analytics', 'Just curious'],
   ['Within 1–2 months', '3–4 months', '5–6 months', 'Still exploring'],
-  ['Bangalore', 'Gurugram', 'Noida', 'Other city'],
+  ['Bangalore', 'Gurugram', 'Noida', 'Online mode'],
   ["Yes, lock me in!", 'I have a question first', 'Not right now'],
 ];
 
