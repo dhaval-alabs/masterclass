@@ -89,11 +89,19 @@ export async function scoreAndSave(params: {
   const { registrationId, conversation, label = '[qualify]' } = params;
   try {
     const { score } = await scoreConversation(conversation);
-    await updateLeadScore(registrationId, score);
+    console.log(`${label} Gemini returned score="${score}" for ${registrationId}`);
+    try {
+      await updateLeadScore(registrationId, score);
+      console.log(`${label} DB write OK → ${registrationId} = ${score}`);
+    } catch (dbErr: unknown) {
+      const msg = dbErr instanceof Error ? dbErr.message : JSON.stringify(dbErr);
+      console.error(`${label} DB write FAILED for ${registrationId}: ${msg}`);
+      console.error(`${label} HINT: Have you run migrations 0020 + 0021 in Supabase? The lead_score column may not exist.`);
+      return;
+    }
     saveConversation(registrationId, conversation)
       .catch(e => console.error(`${label} conversation save failed:`, e));
-    console.log(`${label} scored ${registrationId} → ${score}`);
   } catch (err) {
-    console.error(`${label} scoring failed for ${registrationId}:`, err);
+    console.error(`${label} Gemini scoring failed for ${registrationId}:`, err);
   }
 }
