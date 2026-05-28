@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useSearchParams } from "next/navigation";
 import { Loader2, ArrowLeft, CheckCircle2, Phone, User, Mail, MapPin, Briefcase, Megaphone } from "lucide-react";
 import { initBehaviourTracking, getBehaviourSnapshot } from "@/utils/trackBehaviour";
 import { INDIAN_CITIES, isValidCity } from "@/lib/indian-cities";
 import { validateName, validateEmail, validatePhone, normalizeEmail, normalizePhone } from "@/lib/form-validation";
+import QualificationChat from "./QualificationChat";
 
 export interface RegistrationFormCopy {
   labelName?: string | null;
@@ -91,11 +91,13 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
   const successHeading = copy.successHeading       ?? "You're Registered!";
   const successBody    = copy.successBody          ?? 'Check your WhatsApp and Email for the Zoom link. We look forward to seeing you there!';
 
-  const searchParams = useSearchParams();
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [isChatStep, setIsChatStep] = useState(false);
   const [isOtpStep, setIsOtpStep] = useState(false);
   const [token, setToken] = useState("");
+  const chatConversationRef = useRef<Array<{ role: string; content: string }>>([]);
+  const leadRegistrationIdRef = useRef<string | null>(null);
   const [zoomJoinUrl, setZoomJoinUrl] = useState("");
   const [otp, setOtp] = useState("");
   const [error, setError] = useState("");
@@ -103,10 +105,15 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
   const [isResending, setIsResending] = useState(false);
   const [resendNotice, setResendNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
-  const buildThankYouUrl = (extras: { zoomJoinUrl?: string } = {}) => {
+  const buildThankYouUrl = (extras: { zoomJoinUrl?: string; verified?: boolean; registrationId?: string | null; name?: string; phone?: string; city?: string } = {}) => {
     const params = new URLSearchParams();
     params.set('email', formData.email);
     if (extras.zoomJoinUrl) params.set('zoom_url', extras.zoomJoinUrl);
+    if (extras.verified) params.set('verified', 'true');
+    if (extras.registrationId) params.set('rid', extras.registrationId);
+    if (extras.name) params.set('name', extras.name);
+    if (extras.phone) params.set('phone', extras.phone);
+    if (extras.city) params.set('city', extras.city);
     return `/thankyou-for-registration?${params.toString()}`;
   };
 
@@ -121,6 +128,8 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
 
   const utmRef = useRef<any>({});
   const gclidRef = useRef<string | null>(null);
+  const behaviourSnapshotRef = useRef<any>({});
+  const leadEventIdRef = useRef<string>('');
 
   // ─── Anti-duplicate-fire guards ────────────────────────────────────────
   // Synchronous refs (no React render delay) block the same handler from
@@ -236,8 +245,6 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
   const handleInitialSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Hard-block re-entry while a submit is in flight. React's `isLoading`
-    // state has a render-tick of delay; this ref blocks immediately.
     if (submittingInitialRef.current) return;
     submittingInitialRef.current = true;
 
@@ -266,55 +273,97 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
       city: normalizedCity,
     }));
 
+    setError('');
+
+    // Capture behaviour snapshot and generate event ID before the async call.
+    behaviourSnapshotRef.current = getBehaviourSnapshot();
+    leadEventIdRef.current = newEventId();
+    const fbp = readCookie('_fbp');
+    const fbc = readCookie('_fbc');
+
+    // Fire Lead pixel immediately — form is valid and the user has committed.
+    const nameParts = normalizedName.split(' ');
+    firePixelOnce('Lead', normalizedEmail, {
+      content_name: 'ExcelToAI_Masterclass',
+      content_category: typeFilter,
+    }, leadEventIdRef.current, {
+      phone: normalizedPhone,
+      firstName: nameParts[0] || '',
+      lastName: nameParts.slice(1).join(' '),
+      city: normalizedCity,
+      fbp,
+      fbc,
+    });
+
+    // Capture lead immediately — unverified row exists from this point on,
+    // even if the user never completes OTP.
     setIsLoading(true);
-    setError("");
-
     try {
-      const behaviour = getBehaviourSnapshot();
-      const leadEventId = newEventId();
-      const fbp = readCookie('_fbp');
-      const fbc = readCookie('_fbc');
-
-      const res = await fetch("/api/otp/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/lead/capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...formData,
           fullName: normalizedName,
           email: normalizedEmail,
           phone: normalizedPhone,
           city: normalizedCity,
+          status: formData.status,
+          referralSource: formData.referralSource,
           ...utmRef.current,
           gclid: gclidRef.current,
           typeFilter,
-          behaviour,
-          sourceName: "ExcelToAI_Masterclass",
+          behaviour: behaviourSnapshotRef.current,
+          sourceName: 'ExcelToAI_Masterclass',
           landingPageUrl: window.location.href,
-          eventId: leadEventId,
+          eventId: leadEventIdRef.current,
           fbp,
           fbc,
         }),
       });
-
       const result = await res.json();
       if (result.success) {
-        // Fire Lead exactly once per (event, email, session) — guarded by
-        // sessionStorage so refreshes / re-renders can't refire.
-        // Also pushes to GTM dataLayer with same event_id for Stape CAPI dedup.
-        const nameParts = normalizedName.split(' ');
-        firePixelOnce('Lead', normalizedEmail, {
-          content_name: 'ExcelToAI_Masterclass',
-          content_category: typeFilter,
-        }, leadEventId, {
-          phone: normalizedPhone,
-          firstName: nameParts[0] || '',
-          lastName: nameParts.slice(1).join(' '),
-          city: normalizedCity,
+        leadRegistrationIdRef.current = result.registrationId ?? null;
+        setIsChatStep(true);
+      } else if (result.duplicate) {
+        setError('This email or phone is already registered. Check your inbox for the Zoom link.');
+      } else {
+        setError(result.error || 'Something went wrong. Please try again.');
+      }
+    } catch {
+      setError('Connection error. Please try again.');
+    } finally {
+      setIsLoading(false);
+      submittingInitialRef.current = false;
+    }
+  };
+
+  const handleChatComplete = async (conversation: Array<{ role: string; content: string }>) => {
+    chatConversationRef.current = conversation;
+    setIsLoading(true);
+    setError('');
+    try {
+      const fbp = readCookie('_fbp');
+      const fbc = readCookie('_fbc');
+      const res = await fetch('/api/otp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...formData,
+          ...utmRef.current,
+          gclid: gclidRef.current,
+          typeFilter,
+          behaviour: behaviourSnapshotRef.current,
+          sourceName: 'ExcelToAI_Masterclass',
+          landingPageUrl: window.location.href,
+          eventId: leadEventIdRef.current,
+          registrationId: leadRegistrationIdRef.current,
           fbp,
           fbc,
-        });
-
-        const incomingZoomUrl: string = result.zoomJoinUrl || "";
+        }),
+      });
+      const result = await res.json();
+      if (result.success) {
+        const incomingZoomUrl: string = result.zoomJoinUrl || '';
         setZoomJoinUrl(incomingZoomUrl);
         if (result.fallback) {
           setIsSuccess(true);
@@ -323,21 +372,17 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
           }, 1500);
         } else {
           setToken(result.token);
-          setIsOtpStep(true);
           setResendTimer(60);
+          setIsChatStep(false);
+          setIsOtpStep(true);
         }
       } else {
-        setError(result.error || "Something went wrong. Please try again.");
-        submittingInitialRef.current = false; // allow retry on failure
+        setError(result.error || 'Something went wrong. Please try again.');
       }
-    } catch (err) {
-      setError("Connection error. Please try again.");
-      submittingInitialRef.current = false; // allow retry on network error
+    } catch {
+      setError('Connection error. Please try again.');
     } finally {
       setIsLoading(false);
-      // NOTE: we intentionally DO NOT reset submittingInitialRef on success.
-      // Success means a Lead has been fired; a second submission attempt
-      // would be a duplicate. Page navigation/OTP step prevents re-entry.
     }
   };
 
@@ -365,6 +410,9 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
           otp_entered: otp,
           mobile: formData.phone,
           eventId: completeEventId,
+          // Send conversation so the server can score without depending on
+          // the browser staying alive after the page navigates.
+          conversation: chatConversationRef.current,
           fbp,
           fbc,
           landingPageUrl: window.location.href,
@@ -389,13 +437,39 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
           fbc,
         });
 
+        // Fire lead qualification — keepalive ensures the request survives the
+        // page navigation that follows 1.5 s later (without it the browser
+        // cancels the in-flight fetch before Gemini can respond).
+        if (chatConversationRef.current.length > 0) {
+          fetch('/api/qualify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            keepalive: true,
+            body: JSON.stringify({
+              registrationId: result.registrationId ?? undefined,
+              email: formData.email,
+              phone: formData.phone,
+              name: formData.fullName,
+              city: formData.city,
+              conversation: chatConversationRef.current,
+            }),
+          }).catch(() => {});
+        }
+
         setIsSuccess(true);
         // Prefer the URL returned by /verify (decoded from the signed token).
         // Fall back to the one captured at /send if /verify didn't echo it.
         const finalZoomUrl: string = result.zoomJoinUrl || zoomJoinUrl;
         // Full page navigation to preserve referer for Cloudflare routing
         setTimeout(() => {
-          window.location.href = buildThankYouUrl({ zoomJoinUrl: finalZoomUrl });
+          window.location.href = buildThankYouUrl({
+            zoomJoinUrl: finalZoomUrl,
+            verified: true,
+            registrationId: result.registrationId ?? null,
+            name: result.fullName || formData.fullName,
+            phone: result.phone || formData.phone,
+            city: result.city || formData.city,
+          });
         }, 1500);
       } else {
         setError(result.error || "Invalid code. Please try again.");
@@ -452,6 +526,32 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
         <CheckCircle2 className="w-16 h-16 text-[#00DF83] mx-auto mb-4" />
         <h3 className="text-2xl font-bold mb-2">{successHeading}</h3>
         <p className="text-sm">{successBody}</p>
+      </div>
+    );
+  }
+
+  if (isChatStep) {
+    return (
+      <div className="animate-in slide-in-from-right duration-300">
+        <p className="text-[10px] text-slate-400 uppercase tracking-widest text-center mb-4">
+          Quick 2-min check-in before we send your OTP
+        </p>
+        <QualificationChat
+          name={formData.fullName}
+          email={formData.email}
+          phone={formData.phone}
+          city={formData.city}
+          onComplete={handleChatComplete}
+        />
+        {isLoading && (
+          <div className="flex items-center justify-center gap-2 text-sm text-slate-500 mt-4">
+            <Loader2 className="animate-spin w-4 h-4" />
+            <span>Sending your OTP…</span>
+          </div>
+        )}
+        {error && (
+          <p className="text-xs text-red-500 text-center mt-3">{error}</p>
+        )}
       </div>
     );
   }

@@ -30,6 +30,12 @@ export interface Registration {
   metaAttendedEventFired?: boolean | null;
   // Session the registration belongs to.
   sessionId?: string | null;
+  // LLM lead qualification
+  leadScore?: 'hot' | 'warm' | 'cold' | 'junk' | null;
+  qualifiedAt?: string | null;
+  chatConversation?: Array<{ role: string; content: string }> | null;
+  zoomRegistered?: boolean | null;
+  zoomJoinUrl?: string | null;
 }
 
 export interface Faq {
@@ -397,6 +403,11 @@ type RegistrationRow = {
   attendance_synced_at?: string | null;
   meta_attended_event_fired?: boolean | null;
   session_id?: string | null;
+  lead_score?: 'hot' | 'warm' | 'cold' | 'junk' | null;
+  qualified_at?: string | null;
+  chat_conversation?: Array<{ role: string; content: string }> | null;
+  zoom_registered?: boolean | null;
+  zoom_join_url?: string | null;
 };
 
 type FaqRow = {
@@ -434,6 +445,11 @@ function mapRegistration(row: RegistrationRow): Registration {
     attendanceSyncedAt: row.attendance_synced_at ?? null,
     metaAttendedEventFired: row.meta_attended_event_fired ?? null,
     sessionId: row.session_id ?? null,
+    leadScore: row.lead_score ?? null,
+    qualifiedAt: row.qualified_at ?? null,
+    chatConversation: row.chat_conversation ?? null,
+    zoomRegistered: row.zoom_registered ?? null,
+    zoomJoinUrl: row.zoom_join_url ?? null,
   };
 }
 
@@ -788,12 +804,90 @@ export async function markRegistrationVerified(
   return addRegistration(reg);
 }
 
+export async function updateLeadScore(
+  id: string,
+  score: 'hot' | 'warm' | 'cold' | 'junk',
+): Promise<void> {
+  const { error } = await client()
+    .from('registrations')
+    .update({ lead_score: score, qualified_at: new Date().toISOString() })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+export async function saveConversation(
+  id: string,
+  conversation: Array<{ role: string; content: string }>,
+): Promise<void> {
+  const { error } = await client()
+    .from('registrations')
+    .update({ chat_conversation: conversation })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+export async function updateZoomRegistration(
+  id: string,
+  registered: boolean,
+  joinUrl: string,
+): Promise<void> {
+  const { error } = await client()
+    .from('registrations')
+    .update({ zoom_registered: registered, zoom_join_url: joinUrl || null })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+export async function getScoreBreakdownByCity(
+  sessionId?: string | null,
+): Promise<Array<{ city: string; hot: number; warm: number; cold: number; junk: number; total: number }>> {
+  try {
+    let query = client()
+      .from('registrations')
+      .select('city, lead_score')
+      .not('lead_score', 'is', null)
+      .eq('status', 'Verified');
+    if (sessionId) query = query.eq('session_id', sessionId);
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const map = new Map<string, { hot: number; warm: number; cold: number; junk: number }>();
+    for (const row of data ?? []) {
+      const city = (row.city || 'Unknown').trim();
+      const score = row.lead_score as string;
+      if (!map.has(city)) map.set(city, { hot: 0, warm: 0, cold: 0, junk: 0 });
+      const entry = map.get(city)!;
+      if (score === 'hot' || score === 'warm' || score === 'cold' || score === 'junk') {
+        entry[score]++;
+      }
+    }
+
+    return Array.from(map.entries())
+      .map(([city, counts]) => ({
+        city,
+        ...counts,
+        total: counts.hot + counts.warm + counts.cold + counts.junk,
+      }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 20); // top 20 cities
+  } catch (err) {
+    console.error('[db.getScoreBreakdownByCity]', err);
+    return [];
+  }
+}
+
 export type RegistrationStats = {
   total: number;
   verified: number;
   unverified: number;
   uniqueEmailsStarted: number;
   uniqueEmailsVerified: number;
+  // Lead qualification tier counts (only verified leads are scored)
+  hot: number;
+  warm: number;
+  cold: number;
+  junk: number;
+  unscored: number;
 };
 
 export async function getRegistrationStats(sessionId?: string | null): Promise<RegistrationStats> {
@@ -817,12 +911,21 @@ export async function getRegistrationStats(sessionId?: string | null): Promise<R
     const verifiedEmails = sessionId
       ? supabase.from('registrations').select('email').eq('status', 'Verified').eq('session_id', sessionId)
       : supabase.from('registrations').select('email').eq('status', 'Verified');
-    const [totalRes, verifiedRes, unverifiedRes, allEmailsRes, verifiedEmailsRes] = await Promise.all([
-      total,
-      verified,
-      unverified,
-      allEmails,
-      verifiedEmails,
+    const scoreCount = (score: string) => {
+      let q = supabase.from('registrations').select('*', { count: 'exact', head: true }).eq('lead_score', score);
+      if (sessionId) q = q.eq('session_id', sessionId);
+      return q;
+    };
+    const unscoredQ = (() => {
+      let q = supabase.from('registrations').select('*', { count: 'exact', head: true }).eq('status', 'Verified').is('lead_score', null);
+      if (sessionId) q = q.eq('session_id', sessionId);
+      return q;
+    })();
+
+    const [totalRes, verifiedRes, unverifiedRes, allEmailsRes, verifiedEmailsRes,
+           hotRes, warmRes, coldRes, junkRes, unscoredRes] = await Promise.all([
+      total, verified, unverified, allEmails, verifiedEmails,
+      scoreCount('hot'), scoreCount('warm'), scoreCount('cold'), scoreCount('junk'), unscoredQ,
     ]);
     if (totalRes.error) throw totalRes.error;
     if (verifiedRes.error) throw verifiedRes.error;
@@ -837,10 +940,16 @@ export async function getRegistrationStats(sessionId?: string | null): Promise<R
       unverified: unverifiedRes.count ?? 0,
       uniqueEmailsStarted,
       uniqueEmailsVerified,
+      hot:      hotRes.count      ?? 0,
+      warm:     warmRes.count     ?? 0,
+      cold:     coldRes.count     ?? 0,
+      junk:     junkRes.count     ?? 0,
+      unscored: unscoredRes.count ?? 0,
     };
   } catch (err) {
     console.error('[db.getRegistrationStats]', err);
-    return { total: 0, verified: 0, unverified: 0, uniqueEmailsStarted: 0, uniqueEmailsVerified: 0 };
+    return { total: 0, verified: 0, unverified: 0, uniqueEmailsStarted: 0, uniqueEmailsVerified: 0,
+             hot: 0, warm: 0, cold: 0, junk: 0, unscored: 0 };
   }
 }
 
@@ -855,6 +964,7 @@ export async function getRegistrationsPaginated(
   page: number = 1,
   pageSize: number = 50,
   sessionId?: string | null,
+  scoreFilter?: string | null,
 ): Promise<RegistrationsPage> {
   const safePage = Math.max(1, Math.floor(page));
   const safeSize = Math.max(1, Math.min(200, Math.floor(pageSize)));
@@ -866,6 +976,11 @@ export async function getRegistrationsPaginated(
       .select('*', { count: 'exact' })
       .order('created_at', { ascending: false });
     if (sessionId) query = query.eq('session_id', sessionId);
+    if (scoreFilter === 'unscored') {
+      query = query.eq('status', 'Verified').is('lead_score', null);
+    } else if (scoreFilter && ['hot', 'warm', 'cold', 'junk'].includes(scoreFilter)) {
+      query = query.eq('lead_score', scoreFilter);
+    }
     const { data, error, count } = await query.range(from, to);
     if (error) throw error;
     return {
@@ -2128,7 +2243,7 @@ export async function getEmailCampaignStats(campaignId: string): Promise<EmailEv
     supabase
       .schema('excel_to_ai')
       .from('email_campaigns')
-      .select('sent_count, open_count, unique_open_count, click_count')
+      .select('sent_count, total_recipients, open_count, unique_open_count, click_count')
       .eq('id', campaignId)
       .maybeSingle(),
     supabase
@@ -2140,10 +2255,11 @@ export async function getEmailCampaignStats(campaignId: string): Promise<EmailEv
   ]);
 
   const c = (campaignRes.data ?? {}) as Record<string, number>;
-  const sentCount      = c.sent_count       ?? 0;
-  const totalOpens     = c.open_count        ?? 0;
-  const uniqueOpens    = c.unique_open_count ?? 0;
-  const clickCount     = c.click_count       ?? 0;
+  const totalRecipients = c.total_recipients ?? 0;
+  const sentCount       = c.sent_count       ?? 0;
+  const totalOpens      = c.open_count        ?? 0;
+  const uniqueOpens     = c.unique_open_count ?? 0;
+  const clickCount      = c.click_count       ?? 0;
 
   // Group opens by hour for the timeline chart.
   const hourMap: Record<string, number> = {};
@@ -2156,7 +2272,15 @@ export async function getEmailCampaignStats(campaignId: string): Promise<EmailEv
     .map(([hour, count]) => ({ hour, count }))
     .sort((a, b) => a.hour.localeCompare(b.hour));
 
-  const base = sentCount > 0 ? sentCount : (uniqueOpens > 0 ? uniqueOpens : 1);
+  // Use total_recipients (set at campaign creation = intended audience) as the
+  // denominator. sent_count can be inflated when "Send to new" ran multiple
+  // times, which would make the open rate look artificially low.
+  // Fall back to sent_count → then uniqueOpens so the rate is never div/0.
+  const base = totalRecipients > 0 ? totalRecipients
+             : sentCount       > 0 ? sentCount
+             : uniqueOpens     > 0 ? uniqueOpens
+             : 1;
+
   return {
     totalOpens,
     uniqueOpens,
@@ -2230,7 +2354,7 @@ export async function getAutoSendCampaign(
     .from('email_campaigns')
     .select('*')
     .eq('auto_send_enabled', true)
-    .in('auto_send_audience', [trigger, 'all'])
+    .eq('auto_send_audience', trigger)
     .in('status', ['sent', 'partial', 'sending', 'draft'])
     .order('created_at', { ascending: false })
     .limit(1)

@@ -96,7 +96,26 @@ export default function AdminPortal() {
   const [regPage, setRegPage] = useState(1);
   const [regPageSize, setRegPageSize] = useState(50);
   const [regTotal, setRegTotal] = useState(0);
-  const [regStats, setRegStats] = useState<{ total: number; verified: number; unverified: number; uniqueEmailsStarted: number; uniqueEmailsVerified: number } | null>(null);
+  const [regScoreFilter, setRegScoreFilter] = useState<string>('');
+  const [regStats, setRegStats] = useState<{ total: number; verified: number; unverified: number; uniqueEmailsStarted: number; uniqueEmailsVerified: number; hot: number; warm: number; cold: number; junk: number; unscored: number } | null>(null);
+
+  // Chat transcript modal
+  const [transcriptModal, setTranscriptModal] = useState<{ name: string; conversation: Array<{ role: string; content: string }> } | null>(null);
+
+  // Per-row score override state: regId → { saving, newScore }
+  const [scoreOverrides, setScoreOverrides] = useState<Record<string, { saving: boolean; value: string }>>({});
+
+  // Per-row rescore state: regId → loading bool
+  const [rescoring, setRescoring] = useState<Record<string, boolean>>({});
+
+  // Score breakdown by city
+  const [breakdown, setBreakdown] = useState<Array<{ city: string; hot: number; warm: number; cold: number; junk: number; total: number }> | null>(null);
+  const [isLoadingBreakdown, setIsLoadingBreakdown] = useState(false);
+  const [showBreakdown, setShowBreakdown] = useState(false);
+
+  // Gemini health
+  const [geminiHealth, setGeminiHealth] = useState<{ ok: boolean; score?: string; latencyMs: number; error?: string } | null>(null);
+  const [isCheckingGemini, setIsCheckingGemini] = useState(false);
 
   // Attendance sync state
   const [isSyncingAttendance, setIsSyncingAttendance] = useState(false);
@@ -150,9 +169,10 @@ export default function AdminPortal() {
     fetch('/api/settings').then(res => res.json()).then(data => setSettings(data));
   }, []);
 
-  const loadRegistrations = (page = regPage, pageSize = regPageSize) => {
+  const loadRegistrations = (page = regPage, pageSize = regPageSize, scoreFilter = regScoreFilter) => {
     setIsLoadingRegs(true);
-    fetch(`/api/register?page=${page}&pageSize=${pageSize}&stats=1`)
+    const scoreParam = scoreFilter ? `&score=${encodeURIComponent(scoreFilter)}` : '';
+    fetch(`/api/register?page=${page}&pageSize=${pageSize}&stats=1${scoreParam}`)
       .then(res => res.json())
       .then((res: { data: any[]; total: number; stats?: typeof regStats }) => {
         setRegistrations(Array.isArray(res?.data) ? res.data : []);
@@ -161,6 +181,74 @@ export default function AdminPortal() {
         setIsLoadingRegs(false);
       })
       .catch(() => setIsLoadingRegs(false));
+  };
+
+  // Score override — inline dropdown save
+  const handleScoreOverride = async (regId: string, phone: string | undefined, score: string) => {
+    setScoreOverrides(prev => ({ ...prev, [regId]: { saving: true, value: score } }));
+    try {
+      await fetch(`/api/admin/registrations/${regId}/score`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ score, phone }),
+      });
+      setRegistrations(prev => prev.map(r => r.id === regId ? { ...r, leadScore: score } : r));
+    } catch {
+      // silent — stale row still shows old value
+    } finally {
+      setScoreOverrides(prev => {
+        const next = { ...prev };
+        delete next[regId];
+        return next;
+      });
+    }
+  };
+
+  // Rescore — re-run Gemini on stored conversation
+  const handleRescore = async (reg: any) => {
+    if (!reg.chatConversation?.length) return;
+    setRescoring(prev => ({ ...prev, [reg.id]: true }));
+    try {
+      const res = await fetch(`/api/admin/registrations/${reg.id}/rescore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation: reg.chatConversation, phone: reg.phone }),
+      });
+      const data = await res.json() as { score?: string };
+      if (data.score) {
+        setRegistrations(prev => prev.map(r => r.id === reg.id ? { ...r, leadScore: data.score } : r));
+      }
+    } catch { /* silent */ } finally {
+      setRescoring(prev => { const next = { ...prev }; delete next[reg.id]; return next; });
+    }
+  };
+
+  // Load city breakdown
+  const handleLoadBreakdown = () => {
+    setIsLoadingBreakdown(true);
+    setShowBreakdown(true);
+    fetch('/api/admin/stats/breakdown')
+      .then(r => r.json())
+      .then((d: { breakdown: typeof breakdown }) => { setBreakdown(d.breakdown ?? []); })
+      .catch(() => setBreakdown([]))
+      .finally(() => setIsLoadingBreakdown(false));
+  };
+
+  // Gemini health check
+  const handleGeminiHealth = () => {
+    setIsCheckingGemini(true);
+    setGeminiHealth(null);
+    fetch('/api/admin/gemini/health')
+      .then(r => r.json())
+      .then((d: typeof geminiHealth) => setGeminiHealth(d))
+      .catch(() => setGeminiHealth({ ok: false, latencyMs: 0, error: 'Network error' }))
+      .finally(() => setIsCheckingGemini(false));
+  };
+
+  // CSV export
+  const handleExport = () => {
+    const scoreParam = regScoreFilter ? `&score=${encodeURIComponent(regScoreFilter)}` : '';
+    window.open(`/api/admin/registrations/export?${scoreParam}`, '_blank');
   };
 
   const loadLatestAttendanceSync = () => {
@@ -710,11 +798,37 @@ export default function AdminPortal() {
                       'Clean Duplicates'
                     )}
                   </button>
+                  <button
+                    onClick={handleExport}
+                    className="text-sm bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold py-2 px-4 rounded-lg flex items-center gap-2"
+                    title={`Export ${regScoreFilter ? regScoreFilter + ' leads' : 'all leads'} as CSV`}
+                  >
+                    Export CSV
+                  </button>
+                  <button
+                    onClick={handleGeminiHealth}
+                    disabled={isCheckingGemini}
+                    className="text-sm bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold py-2 px-4 rounded-lg flex items-center gap-2 disabled:opacity-60"
+                    title="Ping Gemini API with a test conversation and measure latency"
+                  >
+                    {isCheckingGemini ? <><Loader2 className="w-4 h-4 animate-spin" /> Checking…</> : 'Gemini Health'}
+                  </button>
                   <button onClick={() => loadRegistrations(regPage, regPageSize)} className="text-sm text-[#003368] font-semibold hover:underline">
-                    Refresh Data
+                    Refresh
                   </button>
                 </div>
               </div>
+
+              {/* Gemini health result */}
+              {geminiHealth && (
+                <div className={`mb-4 p-3 rounded-lg text-sm border flex items-center gap-3 ${geminiHealth.ok ? 'bg-[#00DF83]/10 text-[#003368] border-[#00DF83]/30' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                  <span className="font-bold">{geminiHealth.ok ? '✓ Gemini OK' : '✗ Gemini Error'}</span>
+                  {geminiHealth.ok && <span>Score returned: <strong>{geminiHealth.score}</strong></span>}
+                  <span>Latency: <strong>{geminiHealth.latencyMs}ms</strong></span>
+                  {geminiHealth.error && <span className="text-red-600">{geminiHealth.error}</span>}
+                  <button onClick={() => setGeminiHealth(null)} className="ml-auto text-xs opacity-50 hover:opacity-100">✕</button>
+                </div>
+              )}
 
               {/* Dedupe result banner */}
               {dedupeMessage && (
@@ -744,12 +858,86 @@ export default function AdminPortal() {
 
               {/* Stats summary */}
               {regStats && (
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-                  <StatCard label="Total rows" value={regStats.total} hint="Every form submission attempt" />
-                  <StatCard label="OTP verified" value={regStats.verified} tone="green" hint="Completed registration" />
-                  <StatCard label="OTP not submitted" value={regStats.unverified} tone="red" hint="Started but didn't verify" />
-                  <StatCard label="Unique people started" value={regStats.uniqueEmailsStarted} hint="Distinct emails" />
-                  <StatCard label="Unique people verified" value={regStats.uniqueEmailsVerified} tone="green" hint="Distinct verified emails" />
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
+                    <StatCard label="Total rows" value={regStats.total} hint="Every form submission attempt" />
+                    <StatCard label="OTP verified" value={regStats.verified} tone="green" hint="Completed registration" />
+                    <StatCard label="OTP not submitted" value={regStats.unverified} tone="red" hint="Started but didn't verify" />
+                    <StatCard label="Unique people started" value={regStats.uniqueEmailsStarted} hint="Distinct emails" />
+                    <StatCard label="Unique people verified" value={regStats.uniqueEmailsVerified} tone="green" hint="Distinct verified emails" />
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+                    <StatCard label="Hot leads" value={regStats.hot} tone="red" hint="High intent — call immediately" />
+                    <StatCard label="Warm leads" value={regStats.warm} tone="amber" hint="Moderate intent — nurture" />
+                    <StatCard label="Cold leads" value={regStats.cold} hint="Low urgency — drip sequence" />
+                    <StatCard label="Junk" value={regStats.junk} hint="Dropped — bot or fake" />
+                    <StatCard label="Not yet scored" value={regStats.unscored} hint="Verified but chat not completed" />
+                  </div>
+                </>
+              )}
+
+              {/* Score filter + breakdown toggle */}
+              <div className="flex items-center gap-3 mb-4 flex-wrap">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Filter by score</label>
+                <select
+                  value={regScoreFilter}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setRegScoreFilter(v);
+                    setRegPage(1);
+                    loadRegistrations(1, regPageSize, v);
+                  }}
+                  className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700"
+                >
+                  <option value="">All leads</option>
+                  <option value="hot">Hot</option>
+                  <option value="warm">Warm</option>
+                  <option value="cold">Cold</option>
+                  <option value="junk">Junk</option>
+                  <option value="unscored">Not yet scored</option>
+                </select>
+                <button
+                  onClick={showBreakdown ? () => setShowBreakdown(false) : handleLoadBreakdown}
+                  className="text-xs font-semibold text-[#003368] border border-slate-300 rounded-lg px-3 py-1.5 bg-white hover:bg-slate-50"
+                >
+                  {showBreakdown ? 'Hide breakdown' : 'Score by city'}
+                </button>
+              </div>
+
+              {/* City breakdown table */}
+              {showBreakdown && (
+                <div className="mb-6 overflow-x-auto rounded-lg border border-slate-200">
+                  {isLoadingBreakdown ? (
+                    <div className="py-6 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-[#00DF83]" /></div>
+                  ) : (
+                    <table className="w-full text-sm text-left">
+                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
+                        <tr>
+                          <th className="px-4 py-2 font-semibold">City</th>
+                          <th className="px-4 py-2 font-semibold text-red-600">Hot</th>
+                          <th className="px-4 py-2 font-semibold text-amber-600">Warm</th>
+                          <th className="px-4 py-2 font-semibold text-blue-600">Cold</th>
+                          <th className="px-4 py-2 font-semibold text-slate-400">Junk</th>
+                          <th className="px-4 py-2 font-semibold">Total scored</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {(breakdown ?? []).map(row => (
+                          <tr key={row.city} className="hover:bg-slate-50">
+                            <td className="px-4 py-2 font-medium text-[#003368]">{row.city}</td>
+                            <td className="px-4 py-2 tabular-nums text-red-600 font-semibold">{row.hot || '—'}</td>
+                            <td className="px-4 py-2 tabular-nums text-amber-600 font-semibold">{row.warm || '—'}</td>
+                            <td className="px-4 py-2 tabular-nums text-blue-600">{row.cold || '—'}</td>
+                            <td className="px-4 py-2 tabular-nums text-slate-400">{row.junk || '—'}</td>
+                            <td className="px-4 py-2 tabular-nums font-bold text-[#003368]">{row.total}</td>
+                          </tr>
+                        ))}
+                        {(breakdown ?? []).length === 0 && (
+                          <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-400">No scored leads yet.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
               )}
 
@@ -765,76 +953,143 @@ export default function AdminPortal() {
                     <table className="w-full text-left text-sm whitespace-nowrap">
                       <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
                         <tr>
-                          <th className="px-6 py-3 font-semibold">Date</th>
-                          <th className="px-6 py-3 font-semibold">Name</th>
-                          <th className="px-6 py-3 font-semibold">Email</th>
-                          <th className="px-6 py-3 font-semibold">Phone</th>
-                          <th className="px-6 py-3 font-semibold">Status</th>
-                          <th className="px-6 py-3 font-semibold" title="Which attempt this row represents for the same email/phone">Attempt</th>
-                          <th className="px-6 py-3 font-semibold" title="WhatsApp send-API result (200=sent, api_failed=Meta rejected, skipped=env not configured)">WA Send</th>
-                          <th className="px-6 py-3 font-semibold">Verified At</th>
-                          <th className="px-6 py-3 font-semibold" title="Pulled from Zoom Reports API by the Sync Attendance button">Attended</th>
-                          <th className="px-6 py-3 font-semibold">City</th>
+                          <th className="px-4 py-3 font-semibold">Date</th>
+                          <th className="px-4 py-3 font-semibold">Name</th>
+                          <th className="px-4 py-3 font-semibold">Email</th>
+                          <th className="px-4 py-3 font-semibold">Phone</th>
+                          <th className="px-4 py-3 font-semibold">City</th>
+                          <th className="px-4 py-3 font-semibold">Status</th>
+                          <th className="px-4 py-3 font-semibold" title="Gemini-scored tier. Use the dropdown to override.">Lead Score</th>
+                          <th className="px-4 py-3 font-semibold" title="Zoom registration status after OTP verify">Zoom</th>
+                          <th className="px-4 py-3 font-semibold" title="Pulled from Zoom Reports API">Attended</th>
+                          <th className="px-4 py-3 font-semibold" title="WhatsApp OTP send result">WA</th>
+                          <th className="px-4 py-3 font-semibold">Verified At</th>
+                          <th className="px-4 py-3 font-semibold">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {registrations.map(reg => {
-                          const attempt = typeof reg.attemptNumber === 'number' ? reg.attemptNumber : null;
-                          const isRepeat = attempt !== null && attempt > 1;
                           const waStatus: string | null = reg.whatsappStatus ?? null;
                           const waError: string | null = reg.whatsappError ?? null;
                           const verifiedAt: string | null = reg.verifiedAt ?? null;
+                          const overrideState = scoreOverrides[reg.id];
+                          const isRescoring = !!rescoring[reg.id];
+                          const currentScore = overrideState?.value ?? reg.leadScore ?? '';
+                          const isRepeat = (reg.attemptNumber ?? 1) > 1;
                           return (
-                            <tr key={reg.id} className={`hover:bg-slate-50 transition-colors ${isRepeat ? 'bg-amber-50/40' : ''}`}>
-                              <td className="px-6 py-4 text-slate-500">{new Date(reg.createdAt).toLocaleString()}</td>
-                              <td className="px-6 py-4 font-medium text-[#003368]">{reg.fullName}</td>
-                              <td className="px-6 py-4 text-slate-600">{reg.email}</td>
-                              <td className="px-6 py-4 text-slate-600">{reg.phone}</td>
-                              <td className="px-6 py-4">
-                                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${reg.status === 'Verified' ? 'bg-[#00DF83]/10 text-[#003368]' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                            <tr key={reg.id} className={`hover:bg-slate-50 transition-colors ${isRepeat ? 'bg-amber-50/30' : ''}`}>
+                              {/* Date */}
+                              <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">{new Date(reg.createdAt).toLocaleString()}</td>
+                              {/* Name */}
+                              <td className="px-4 py-3 font-medium text-[#003368]">{reg.fullName}</td>
+                              {/* Email */}
+                              <td className="px-4 py-3 text-slate-600 text-xs">{reg.email}</td>
+                              {/* Phone */}
+                              <td className="px-4 py-3 text-slate-600">{reg.phone}</td>
+                              {/* City */}
+                              <td className="px-4 py-3 text-slate-600">{reg.city || '—'}</td>
+                              {/* OTP Status */}
+                              <td className="px-4 py-3">
+                                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${reg.status === 'Verified' ? 'bg-[#00DF83]/10 text-[#003368]' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
                                   {reg.status}
                                 </span>
                               </td>
-                              <td className="px-6 py-4">
-                                {attempt === null ? (
-                                  <span className="text-slate-400">—</span>
+                              {/* Lead Score — inline override dropdown */}
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-1.5">
+                                  <select
+                                    value={currentScore}
+                                    onChange={e => {
+                                      const newScore = e.target.value;
+                                      if (newScore && newScore !== reg.leadScore) {
+                                        handleScoreOverride(reg.id, reg.phone, newScore);
+                                      }
+                                    }}
+                                    disabled={!!overrideState?.saving}
+                                    className={`text-xs font-bold rounded-full border px-2 py-0.5 cursor-pointer disabled:opacity-50 ${
+                                      currentScore === 'hot'  ? 'bg-red-100 text-red-700 border-red-200' :
+                                      currentScore === 'warm' ? 'bg-amber-100 text-amber-700 border-amber-200' :
+                                      currentScore === 'cold' ? 'bg-blue-100 text-blue-700 border-blue-200' :
+                                      currentScore === 'junk' ? 'bg-slate-100 text-slate-500 border-slate-200' :
+                                      'bg-white text-slate-400 border-slate-200'
+                                    }`}
+                                  >
+                                    <option value="">— score —</option>
+                                    <option value="hot">Hot</option>
+                                    <option value="warm">Warm</option>
+                                    <option value="cold">Cold</option>
+                                    <option value="junk">Junk</option>
+                                  </select>
+                                  {overrideState?.saving && <Loader2 className="w-3 h-3 animate-spin text-slate-400" />}
+                                </div>
+                              </td>
+                              {/* Zoom registration */}
+                              <td className="px-4 py-3">
+                                {reg.zoomRegistered === true ? (
+                                  <a
+                                    href={reg.zoomJoinUrl || '#'}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs font-semibold text-[#00875A] hover:underline"
+                                    title={reg.zoomJoinUrl || 'Registered'}
+                                  >
+                                    Registered
+                                  </a>
+                                ) : reg.zoomRegistered === false ? (
+                                  <span className="text-xs font-semibold text-red-500">Failed</span>
                                 ) : (
-                                  <span className={`tabular-nums font-semibold ${isRepeat ? 'text-amber-700' : 'text-slate-500'}`}>#{attempt}</span>
+                                  <span className="text-slate-300 text-xs">—</span>
                                 )}
                               </td>
-                              <td className="px-6 py-4">
-                                {waStatus === 'sent' ? (
-                                  <span className="text-xs font-semibold text-[#00875A]">sent</span>
-                                ) : waStatus === 'api_failed' ? (
-                                  <span className="text-xs font-semibold text-red-600" title={waError ?? 'unknown error'}>
-                                    api_failed
-                                  </span>
-                                ) : waStatus === 'skipped' ? (
-                                  <span className="text-xs font-semibold text-slate-500">skipped</span>
-                                ) : (
-                                  <span className="text-slate-400">—</span>
-                                )}
-                              </td>
-                              <td className="px-6 py-4 text-slate-500 text-xs tabular-nums">
-                                {verifiedAt ? new Date(verifiedAt).toLocaleString() : '—'}
-                              </td>
-                              <td className="px-6 py-4">
+                              {/* Attended */}
+                              <td className="px-4 py-3">
                                 {reg.attended === true ? (
-                                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#00875A] bg-[#00DF83]/10 px-2 py-0.5 rounded-full" title={reg.attendanceDurationMin ? `${reg.attendanceDurationMin} min` : undefined}>
-                                    Attended
-                                    {typeof reg.attendanceDurationMin === 'number' && reg.attendanceDurationMin > 0 && (
-                                      <span className="text-slate-500 font-normal"> · {reg.attendanceDurationMin}m</span>
-                                    )}
+                                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#00875A] bg-[#00DF83]/10 px-2 py-0.5 rounded-full">
+                                    Attended{typeof reg.attendanceDurationMin === 'number' && reg.attendanceDurationMin > 0 && <span className="font-normal text-slate-500"> · {reg.attendanceDurationMin}m</span>}
                                   </span>
                                 ) : reg.attended === false ? (
-                                  <span className="inline-flex items-center text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
-                                    No-show
-                                  </span>
+                                  <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">No-show</span>
                                 ) : (
-                                  <span className="text-slate-400 text-xs">—</span>
+                                  <span className="text-slate-300 text-xs">—</span>
                                 )}
                               </td>
-                              <td className="px-6 py-4 text-slate-600">{reg.city || '-'}</td>
+                              {/* WA Send */}
+                              <td className="px-4 py-3">
+                                {waStatus === 'sent' ? (
+                                  <span className="text-xs font-semibold text-[#00875A]">✓</span>
+                                ) : waStatus === 'api_failed' ? (
+                                  <span className="text-xs font-semibold text-red-500" title={waError ?? 'unknown'}>✗</span>
+                                ) : (
+                                  <span className="text-slate-300 text-xs">—</span>
+                                )}
+                              </td>
+                              {/* Verified At */}
+                              <td className="px-4 py-3 text-slate-500 text-xs tabular-nums whitespace-nowrap">
+                                {verifiedAt ? new Date(verifiedAt).toLocaleString() : '—'}
+                              </td>
+                              {/* Actions */}
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  {reg.chatConversation?.length > 0 && (
+                                    <button
+                                      onClick={() => setTranscriptModal({ name: reg.fullName, conversation: reg.chatConversation })}
+                                      className="text-xs text-[#003368] font-semibold border border-slate-300 rounded px-2 py-0.5 hover:bg-slate-50 whitespace-nowrap"
+                                    >
+                                      Transcript
+                                    </button>
+                                  )}
+                                  {reg.chatConversation?.length > 0 && (
+                                    <button
+                                      onClick={() => handleRescore(reg)}
+                                      disabled={isRescoring}
+                                      className="text-xs text-slate-600 border border-slate-200 rounded px-2 py-0.5 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
+                                      title="Re-run Gemini scoring on this lead's conversation"
+                                    >
+                                      {isRescoring ? <Loader2 className="w-3 h-3 animate-spin inline" /> : 'Re-score'}
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
                             </tr>
                           );
                         })}
@@ -886,6 +1141,31 @@ export default function AdminPortal() {
                     </div>
                   </div>
                 </>
+              )}
+
+              {/* Chat transcript modal */}
+              {transcriptModal && (
+                <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => setTranscriptModal(null)}>
+                  <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                    <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+                      <h3 className="font-bold text-[#003368]">Chat transcript — {transcriptModal.name}</h3>
+                      <button onClick={() => setTranscriptModal(null)} className="text-slate-400 hover:text-slate-700 text-xl font-bold leading-none">✕</button>
+                    </div>
+                    <div className="p-6 overflow-y-auto flex-1 space-y-3">
+                      {transcriptModal.conversation.map((msg, i) => (
+                        <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm ${
+                            msg.role === 'user'
+                              ? 'bg-[#09263F] text-white rounded-br-sm'
+                              : 'bg-slate-100 text-[#09263F] rounded-bl-sm'
+                          }`}>
+                            {msg.content}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               )}
 
               {/* Dedup preview modal */}
@@ -1494,17 +1774,21 @@ export default function AdminPortal() {
 
 // ─── Small UI helpers for the Webinar tab ───────────────────────────────────
 
-function StatCard({ label, value, hint, tone }: { label: string; value: number; hint?: string; tone?: 'green' | 'red' }) {
+function StatCard({ label, value, hint, tone }: { label: string; value: number; hint?: string; tone?: 'green' | 'red' | 'amber' }) {
   const valueColor = tone === 'green'
     ? 'text-[#00875A]'
     : tone === 'red'
       ? 'text-red-600'
-      : 'text-[#003368]';
+      : tone === 'amber'
+        ? 'text-amber-600'
+        : 'text-[#003368]';
   const borderColor = tone === 'green'
     ? 'border-[#00DF83]/30 bg-[#00DF83]/5'
     : tone === 'red'
       ? 'border-red-200 bg-red-50'
-      : 'border-slate-200 bg-white';
+      : tone === 'amber'
+        ? 'border-amber-200 bg-amber-50'
+        : 'border-slate-200 bg-white';
   return (
     <div className={`rounded-xl border ${borderColor} p-4`}>
       <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</div>

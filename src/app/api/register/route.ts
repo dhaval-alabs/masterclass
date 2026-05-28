@@ -17,9 +17,10 @@ export async function GET(request: Request) {
   const page = parseInt(url.searchParams.get('page') ?? '1', 10) || 1;
   const pageSize = parseInt(url.searchParams.get('pageSize') ?? '50', 10) || 50;
   const wantStats = url.searchParams.get('stats') === '1';
+  const scoreFilter = url.searchParams.get('score') || null;
 
   const [pageRes, stats] = await Promise.all([
-    getRegistrationsPaginated(page, pageSize),
+    getRegistrationsPaginated(page, pageSize, null, scoreFilter),
     wantStats ? getRegistrationStats() : Promise.resolve(null),
   ]);
 

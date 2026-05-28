@@ -100,6 +100,9 @@ export default function ThankYouPage({ heading: headingProp, subCopy: subCopyPro
   const isVerified = searchParams.get('verified') === 'true';
   const courseSlug = searchParams.get('course') || '';
   const personalZoomUrl = (searchParams.get('zoom_url') || '').trim();
+  const registrationId = searchParams.get('rid') || undefined;
+  const rawPhone = searchParams.get('phone') || '';
+  const rawCity = searchParams.get('city') || '';
 
   const email = decodeURIComponent(rawEmail);
   const name = decodeURIComponent(rawName);

@@ -397,6 +397,13 @@ function CampaignStatsPanel({ campaign }: { campaign: Campaign }) {
 
   useEffect(() => { fetchStats(); }, [fetchStats]);
 
+  // Auto-refresh every 30 s while the panel is open so the admin can watch
+  // opens come in without having to click Refresh manually.
+  useEffect(() => {
+    const id = setInterval(() => fetchStats(true), 30_000);
+    return () => clearInterval(id);
+  }, [fetchStats]);
+
   // Cap delivered at totalRecipients — sentCount can exceed it when send-new ran
   // multiple times before the totalRecipients counter was being saved correctly.
   const deliveredCount = Math.min(campaign.sentCount, campaign.totalRecipients);
@@ -460,7 +467,7 @@ function CampaignStatsPanel({ campaign }: { campaign: Campaign }) {
       {/* Refresh bar */}
       <div className="flex items-center justify-between">
         <span className="text-[11px] text-slate-400">
-          {lastRefreshed ? `Updated ${lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "Loading…"}
+          {lastRefreshed ? `Updated ${lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })} · auto-refreshes every 30s` : "Loading…"}
         </span>
         <button onClick={() => fetchStats(true)} disabled={refreshing}
           className="flex items-center gap-1 text-xs font-semibold text-[#003368] hover:text-[#002244] disabled:opacity-50 transition-colors">
@@ -530,7 +537,9 @@ function CampaignStatsPanel({ campaign }: { campaign: Campaign }) {
       )}
 
       {!isDraft && stats && stats.totalOpens === 0 && (
-        <p className="text-xs text-slate-400 text-center py-2">No opens recorded yet.</p>
+        <p className="text-xs text-slate-400 text-center py-2">
+          No opens recorded yet. Opens only register when the recipient loads images — many email clients block this by default.
+        </p>
       )}
 
       {/* Scheduled queue summary */}
