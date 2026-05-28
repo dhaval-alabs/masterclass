@@ -8,6 +8,8 @@ import {
 } from '@/lib/db';
 import { sendCampaignEmails } from '@/lib/email';
 
+export const dynamic = 'force-dynamic';
+
 // GET /api/admin/email/campaigns — list all campaigns
 export async function GET() {
   try {
