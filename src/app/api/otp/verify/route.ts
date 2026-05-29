@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration } from '@/lib/db';
+import fs from 'fs';
+import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation } from '@/lib/db';
 import { registerWebinarParticipant } from '@/lib/zoom';
 import { scoreAndSave, type ConversationTurn } from '@/lib/qualify';
+
+// Diagnostic: append a line to a temp file so scoring issues can be traced
+// even when the dev server's stdout isn't being captured. Safe no-op on error.
+function debugLog(line: string) {
+  try {
+    fs.appendFileSync('/tmp/excel-verify-debug.log', `${new Date().toISOString()} ${line}\n`);
+  } catch { /* ignore */ }
+}
 // Meta CAPI is now sent by Stape (server-side GTM). We only generate the
 // event_id here and return it to the client so the browser pixel and Stape
 // use the same id for dedup.
@@ -42,6 +51,7 @@ export async function POST(req: NextRequest) {
     const conversation = Array.isArray(incomingConversation) ? (incomingConversation as ConversationTurn[]) : [];
 
     console.log('[verify] conversation received — turns:', conversation.length, '| raw type:', typeof incomingConversation, '| isArray:', Array.isArray(incomingConversation));
+    debugLog(`[verify] POST received — conversation turns=${conversation.length} rawType=${typeof incomingConversation} isArray=${Array.isArray(incomingConversation)} bodyKeys=${Object.keys(body).join(',')}`);
 
     if (!token || !otp_entered) {
       return NextResponse.json({ success: false, error: 'Missing parameters' }, { status: 400 });
@@ -53,6 +63,7 @@ export async function POST(req: NextRequest) {
     const { expiry, hmac, fullName, email, phone, city, zoomWebinarId, registrationId } = decoded;
 
     console.log('[verify] token decoded — registrationId:', registrationId ?? 'NULL', '| email:', email);
+    debugLog(`[verify] token decoded — registrationId=${registrationId ?? 'NULL'} email=${email}`);
 
     // 1. Check Expiry
     if (Date.now() > expiry) {
@@ -85,15 +96,31 @@ export async function POST(req: NextRequest) {
       await addRegistration(verifiedPayload);
     }
 
-    // 5. Score lead with Gemini — server-side so it completes even if the
-    // browser navigates away immediately after OTP submission.
-    console.log('[verify] scoring gate — registrationId ok:', !!(registrationId && typeof registrationId === 'string'), '| conversation turns:', conversation.length);
-    if (registrationId && typeof registrationId === 'string' && conversation.length > 0) {
-      console.log('[verify] firing scoreAndSave for', registrationId);
-      scoreAndSave({ registrationId, conversation, label: '[verify/qualify]' });
-      // fire-and-forget — don't await, don't block the OTP response
+    // 5. Persist conversation + score lead with Gemini — server-side so it
+    // completes even if the browser navigates away after OTP submission.
+    const hasRegId = !!(registrationId && typeof registrationId === 'string');
+    console.log('[verify] scoring gate — registrationId ok:', hasRegId, '| conversation turns:', conversation.length);
+    debugLog(`[verify] scoring gate — hasRegId=${hasRegId} turns=${conversation.length}`);
+
+    if (hasRegId) {
+      // Always save the conversation even if it's empty/scoring is skipped —
+      // this lets us distinguish "conversation never arrived" (turns=0) from
+      // "arrived but scoring failed" in the debug endpoint.
+      if (conversation.length > 0) {
+        console.log('[verify] firing scoreAndSave for', registrationId);
+        debugLog(`[verify] firing scoreAndSave for ${registrationId}`);
+        scoreAndSave({ registrationId, conversation, label: '[verify/qualify]' });
+        // fire-and-forget — don't await, don't block the OTP response
+      } else {
+        console.warn('[verify] scoring SKIPPED — empty conversation for', registrationId);
+        debugLog(`[verify] scoring SKIPPED — empty conversation for ${registrationId} (client sent no chat turns)`);
+        // Still record that we got here so the conversation column isn't silently null
+        saveConversation(registrationId, conversation)
+          .catch(e => console.error('[verify] empty-conversation save failed:', e));
+      }
     } else {
-      console.warn('[verify] scoring SKIPPED — registrationId:', registrationId, '| conversation.length:', conversation.length);
+      console.warn('[verify] scoring SKIPPED — no registrationId');
+      debugLog('[verify] scoring SKIPPED — no registrationId in token');
     }
 
     // 6. Register with Zoom now that the user is verified — this is what
