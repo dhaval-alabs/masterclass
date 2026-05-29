@@ -46,7 +46,7 @@ export async function scoreConversation(
         signal: controller.signal,
         body: JSON.stringify({
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0, maxOutputTokens: 256 },
+          generationConfig: { temperature: 0, maxOutputTokens: 1024 },
         }),
       },
     );
@@ -59,18 +59,24 @@ export async function scoreConversation(
     const data = await res.json();
     const raw = (data.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim();
 
+    // Fast path: regex extraction works even on truncated JSON responses
+    const scoreMatch = raw.match(/"score"\s*:\s*"(hot|warm|cold|junk)"/i);
+    const reasonMatch = raw.match(/"reason"\s*:\s*"([^"]{1,300})"/i);
+    if (scoreMatch) {
+      const score = scoreMatch[1].toLowerCase() as LeadScore;
+      console.log(`[qualify] regex extracted score="${score}" from Gemini`);
+      return { score, reason: reasonMatch?.[1] ?? '' };
+    }
+
+    // Slow path: full JSON parse (for well-formed responses without truncation)
     const stripped = raw.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
     const start = stripped.indexOf('{');
     const end   = stripped.lastIndexOf('}');
-    if (start === -1 || end <= start) throw new Error(`No JSON in Gemini response: ${raw.slice(0, 200)}`);
+    if (start === -1 || end <= start) throw new Error(`No JSON in Gemini response: ${raw.slice(0, 300)}`);
 
     const parsed = JSON.parse(stripped.slice(start, end + 1)) as { score: string; reason: string };
-    let score = parsed.score?.toLowerCase() as LeadScore;
-    if (!VALID.includes(score)) {
-      const m = raw.match(/"score"\s*:\s*"(hot|warm|cold|junk)"/i);
-      if (!m) throw new Error(`Invalid score from Gemini: ${parsed.score}`);
-      score = m[1].toLowerCase() as LeadScore;
-    }
+    const score = parsed.score?.toLowerCase() as LeadScore;
+    if (!VALID.includes(score)) throw new Error(`Invalid score from Gemini: ${parsed.score}`);
     return { score, reason: parsed.reason ?? '' };
   } finally {
     clearTimeout(timeout);
@@ -87,6 +93,12 @@ export async function scoreAndSave(params: {
   label?: string;
 }): Promise<void> {
   const { registrationId, conversation, label = '[qualify]' } = params;
+
+  // Save conversation immediately — independent of Gemini success so we
+  // never lose chat data even if scoring fails or times out.
+  saveConversation(registrationId, conversation)
+    .catch(e => console.error(`${label} conversation save failed:`, e));
+
   try {
     const { score } = await scoreConversation(conversation);
     console.log(`${label} Gemini returned score="${score}" for ${registrationId}`);
@@ -96,11 +108,7 @@ export async function scoreAndSave(params: {
     } catch (dbErr: unknown) {
       const msg = dbErr instanceof Error ? dbErr.message : JSON.stringify(dbErr);
       console.error(`${label} DB write FAILED for ${registrationId}: ${msg}`);
-      console.error(`${label} HINT: Have you run migrations 0020 + 0021 in Supabase? The lead_score column may not exist.`);
-      return;
     }
-    saveConversation(registrationId, conversation)
-      .catch(e => console.error(`${label} conversation save failed:`, e));
   } catch (err) {
     console.error(`${label} Gemini scoring failed for ${registrationId}:`, err);
   }

@@ -41,6 +41,8 @@ export async function POST(req: NextRequest) {
     const { token, otp_entered, eventId: incomingEventId, conversation: incomingConversation } = body;
     const conversation = Array.isArray(incomingConversation) ? (incomingConversation as ConversationTurn[]) : [];
 
+    console.log('[verify] conversation received — turns:', conversation.length, '| raw type:', typeof incomingConversation, '| isArray:', Array.isArray(incomingConversation));
+
     if (!token || !otp_entered) {
       return NextResponse.json({ success: false, error: 'Missing parameters' }, { status: 400 });
     }
@@ -49,6 +51,8 @@ export async function POST(req: NextRequest) {
     if (hmacSecret.length < 32) throw new Error('OTP_HMAC_SECRET must be at least 32 chars');
     const decoded = JSON.parse(Buffer.from(token, 'base64').toString('utf8'));
     const { expiry, hmac, fullName, email, phone, city, zoomWebinarId, registrationId } = decoded;
+
+    console.log('[verify] token decoded — registrationId:', registrationId ?? 'NULL', '| email:', email);
 
     // 1. Check Expiry
     if (Date.now() > expiry) {
@@ -83,9 +87,13 @@ export async function POST(req: NextRequest) {
 
     // 5. Score lead with Gemini — server-side so it completes even if the
     // browser navigates away immediately after OTP submission.
+    console.log('[verify] scoring gate — registrationId ok:', !!(registrationId && typeof registrationId === 'string'), '| conversation turns:', conversation.length);
     if (registrationId && typeof registrationId === 'string' && conversation.length > 0) {
+      console.log('[verify] firing scoreAndSave for', registrationId);
       scoreAndSave({ registrationId, conversation, label: '[verify/qualify]' });
       // fire-and-forget — don't await, don't block the OTP response
+    } else {
+      console.warn('[verify] scoring SKIPPED — registrationId:', registrationId, '| conversation.length:', conversation.length);
     }
 
     // 6. Register with Zoom now that the user is verified — this is what
