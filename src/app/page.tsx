@@ -10,7 +10,7 @@ import SeoJsonLd from "@/components/SeoJsonLd";
 
 export const dynamic = 'force-dynamic';
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://careersuccess.analytixlabs.co.in';
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://masterclass.analytixlabs.co.in';
 
 /**
  * Renders a stat value, wrapping any `★` character in a gold-coloured span
