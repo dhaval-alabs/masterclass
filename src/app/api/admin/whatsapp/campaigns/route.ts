@@ -4,7 +4,7 @@ import {
   getEmailRecipients, getActiveWebinarSession,
   createWhatsAppCampaign, updateWhatsAppCampaign, listWhatsAppCampaigns,
 } from '@/lib/db';
-import { sendWhatsAppCampaign } from '@/lib/whatsapp';
+import { sendWhatsAppCampaign, getBroadcastCreds } from '@/lib/whatsapp';
 
 export async function GET() {
   try {
@@ -30,7 +30,8 @@ export async function POST(req: NextRequest) {
   }
   const aud = audience as 'verified' | 'unverified' | 'all';
 
-  const configured = !!process.env.META_WA_ACCESS_TOKEN && !!process.env.META_WA_PHONE_NUMBER_ID;
+  const broadcastCreds = getBroadcastCreds();
+  const configured = !!broadcastCreds.waAccessToken && !!broadcastCreds.waPhoneId;
 
   try {
     const session    = await getActiveWebinarSession();
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
         totalRecipients: recipients.length,
         status: 'draft',
       });
-      return NextResponse.json({ success: true, campaign, configured: false, message: `Saved as draft. META_WA_ACCESS_TOKEN not configured.` });
+      return NextResponse.json({ success: true, campaign, configured: false, message: `Saved as draft. WhatsApp broadcast credentials not configured.` });
     }
 
     if (recipients.length === 0) {

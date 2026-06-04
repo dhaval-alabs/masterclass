@@ -20,6 +20,27 @@ export type WhatsAppSendResult = {
   error: string | null;
 };
 
+/**
+ * Credentials for OUTBOUND BROADCAST / marketing sends (campaigns, template
+ * list, admin test message). Uses a dedicated broadcast number when its env
+ * vars are set, otherwise falls back to the OTP number's credentials so
+ * existing behaviour is unchanged.
+ *
+ * OTP (sendWhatsAppOtp) deliberately stays on META_WA_* and does NOT use this,
+ * so marketing volume / quality-rating issues can never affect OTP delivery.
+ */
+export function getBroadcastCreds(): {
+  waAccessToken: string | undefined;
+  waPhoneId: string | undefined;
+  wabaId: string | undefined;
+} {
+  return {
+    waAccessToken: process.env.META_WA_BROADCAST_ACCESS_TOKEN || process.env.META_WA_ACCESS_TOKEN,
+    waPhoneId:     process.env.META_WA_BROADCAST_PHONE_NUMBER_ID || process.env.META_WA_PHONE_NUMBER_ID,
+    wabaId:        process.env.META_WA_BROADCAST_WABA_ID || process.env.META_WABA_ID,
+  };
+}
+
 export async function sendWhatsAppOtp(
   phone: string,
   otp: string,
@@ -169,10 +190,10 @@ export async function sendWhatsAppCampaign(params: {
 }): Promise<WaCampaignResult> {
   const { campaignId, templateName, languageCode, variables, recipients } = params;
 
-  const waAccessToken = process.env.META_WA_ACCESS_TOKEN;
-  const waPhoneId     = process.env.META_WA_PHONE_NUMBER_ID;
+  // Broadcast sends go from the dedicated broadcast number (falls back to OTP creds).
+  const { waAccessToken, waPhoneId } = getBroadcastCreds();
   if (!waAccessToken || !waPhoneId) {
-    return { sentCount: 0, failedCount: recipients.length, skippedCount: 0, errors: ['META_WA_ACCESS_TOKEN or META_WA_PHONE_NUMBER_ID not configured'] };
+    return { sentCount: 0, failedCount: recipients.length, skippedCount: 0, errors: ['WhatsApp broadcast credentials not configured (META_WA_BROADCAST_* or META_WA_*)'] };
   }
 
   // 1. Validate phone numbers — must be 10 digits starting with 6-9.

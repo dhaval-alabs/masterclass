@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getBroadcastCreds } from '@/lib/whatsapp';
 
 const GRAPH_API_VERSION = 'v22.0';
 
@@ -12,10 +13,9 @@ export async function POST(req: NextRequest) {
   if (!toPhone?.trim())       return NextResponse.json({ error: 'toPhone is required' },       { status: 400 });
   if (!templateName?.trim())  return NextResponse.json({ error: 'templateName is required' },  { status: 400 });
 
-  const waAccessToken = process.env.META_WA_ACCESS_TOKEN;
-  const waPhoneId     = process.env.META_WA_PHONE_NUMBER_ID;
+  const { waAccessToken, waPhoneId } = getBroadcastCreds();
   if (!waAccessToken || !waPhoneId) {
-    return NextResponse.json({ error: 'META_WA_ACCESS_TOKEN or META_WA_PHONE_NUMBER_ID not configured' }, { status: 503 });
+    return NextResponse.json({ error: 'WhatsApp broadcast credentials not configured (META_WA_BROADCAST_* or META_WA_*)' }, { status: 503 });
   }
 
   // Replace {name} with "Preview" for test sends.

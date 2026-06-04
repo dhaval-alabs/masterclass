@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
+import { getBroadcastCreds } from '@/lib/whatsapp';
 
 const GRAPH_API_VERSION = 'v22.0';
 
@@ -13,13 +14,12 @@ export interface WaTemplate {
 
 // GET /api/admin/whatsapp/templates
 export async function GET() {
-  const token   = process.env.META_WA_ACCESS_TOKEN;
-  const phoneId = process.env.META_WA_PHONE_NUMBER_ID;
-  const wabaId  = process.env.META_WABA_ID;
+  // Templates live on the broadcast number's WABA (falls back to OTP creds).
+  const { waAccessToken: token, waPhoneId: phoneId, wabaId } = getBroadcastCreds();
 
   if (!token || !phoneId) {
     return NextResponse.json(
-      { error: 'META_WA_ACCESS_TOKEN or META_WA_PHONE_NUMBER_ID not configured' },
+      { error: 'WhatsApp broadcast credentials not configured (META_WA_BROADCAST_* or META_WA_*)' },
       { status: 503 },
     );
   }
