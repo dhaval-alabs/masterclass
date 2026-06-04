@@ -45,7 +45,8 @@ export async function POST(
       status:       finalStatus,
       sentCount:    newSent,
       failedCount:  newFailed,
-      errorSummary: result.errors.length ? result.errors.slice(0, 3).join(' | ') : campaign.errorSummary,
+      // Clear any stale error from a past attempt when this retry had no errors.
+      errorSummary: result.errors.length ? result.errors.slice(0, 3).join(' | ') : null,
       sentAt:       campaign.sentAt ?? new Date().toISOString(),
       ...(overrideImage ? { headerImageUrl } : {}),
     });

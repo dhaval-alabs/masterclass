@@ -2834,6 +2834,14 @@ export async function reconcileWhatsAppCampaignCounters(
     if (cur === undefined || (rank[l.status] ?? -1) > (rank[cur] ?? -1)) best.set(key, l.status);
   }
 
+  // Keep the full best row per phone (we need error_detail for the summary).
+  const bestRow = new Map<string, typeof logs[number]>();
+  for (const l of logs) {
+    const key = (l.phone || '').replace(/\D/g, '').slice(-10) || l.id;
+    const cur = bestRow.get(key);
+    if (cur === undefined || (rank[l.status] ?? -1) > (rank[cur.status] ?? -1)) bestRow.set(key, l);
+  }
+
   const statuses = [...best.values()];
   const total   = statuses.length;
   const sent    = statuses.filter(s => s === 'sent' || s === 'delivered' || s === 'read').length;
@@ -2844,11 +2852,19 @@ export async function reconcileWhatsAppCampaignCounters(
     sent === 0 ? 'failed' :
     failed === 0 && skipped === 0 ? 'sent' : 'partial';
 
+  // Rebuild errorSummary from the ACTUAL failed rows (top distinct reasons),
+  // replacing any stale message; null when nothing currently fails.
+  const reasons = [...new Set(
+    [...bestRow.values()].filter(r => r.status === 'failed').map(r => (r.errorDetail || 'Unknown').trim()),
+  )];
+  const errorSummary = reasons.length ? reasons.slice(0, 3).join(' | ') : null;
+
   await updateWhatsAppCampaign(campaignId, {
     totalRecipients: total,
     sentCount: sent,
     failedCount: failed,
     status,
+    errorSummary,
   });
 
   return { total, sent, failed, skipped, status };
