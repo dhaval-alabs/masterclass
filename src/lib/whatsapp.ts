@@ -187,8 +187,10 @@ export async function sendWhatsAppCampaign(params: {
   languageCode: string;
   variables: string[];
   recipients: { phone: string; fullName: string }[];
+  // For templates with an IMAGE header — public URL of the header image.
+  headerImageUrl?: string | null;
 }): Promise<WaCampaignResult> {
-  const { campaignId, templateName, languageCode, variables, recipients } = params;
+  const { campaignId, templateName, languageCode, variables, recipients, headerImageUrl } = params;
 
   // Broadcast sends go from the dedicated broadcast number (falls back to OTP creds).
   const { waAccessToken, waPhoneId } = getBroadcastCreds();
@@ -271,9 +273,14 @@ export async function sendWhatsAppCampaign(params: {
     const r = activeRecipients[i];
     const firstName    = r.fullName.split(' ')[0] || r.fullName;
     const resolvedVars = variables.map(v => v.replace(/\{name\}/gi, firstName));
-    const components   = resolvedVars.length > 0
-      ? [{ type: 'body', parameters: resolvedVars.map(text => ({ type: 'text', text })) }]
-      : [];
+    const components: unknown[] = [];
+    // Image header (if the template has one) must be supplied at send time.
+    if (headerImageUrl) {
+      components.push({ type: 'header', parameters: [{ type: 'image', image: { link: headerImageUrl } }] });
+    }
+    if (resolvedVars.length > 0) {
+      components.push({ type: 'body', parameters: resolvedVars.map(text => ({ type: 'text', text })) });
+    }
 
     const result = await sendOneMessage({
       waAccessToken, waPhoneId,

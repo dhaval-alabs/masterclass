@@ -16,12 +16,13 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  let body: { templateName?: string; languageCode?: string; audience?: string; variables?: string[] };
+  let body: { templateName?: string; languageCode?: string; audience?: string; variables?: string[]; headerImageUrl?: string };
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
   const { templateName, languageCode = 'en_US', audience, variables = [] } = body;
+  const headerImageUrl = body.headerImageUrl?.trim() || null;
   if (!templateName?.trim()) return NextResponse.json({ error: 'templateName is required' }, { status: 400 });
 
   const validAudiences = ['verified', 'unverified', 'all'] as const;
@@ -46,6 +47,7 @@ export async function POST(req: NextRequest) {
         languageCode,
         audience: aud,
         variables,
+        headerImageUrl,
         totalRecipients: recipients.length,
         status: 'draft',
       });
@@ -59,6 +61,7 @@ export async function POST(req: NextRequest) {
         languageCode,
         audience: aud,
         variables,
+        headerImageUrl,
         totalRecipients: 0,
         status: 'draft',
       });
@@ -81,6 +84,7 @@ export async function POST(req: NextRequest) {
       languageCode,
       variables,
       recipients,
+      headerImageUrl,
     });
 
     const finalStatus =

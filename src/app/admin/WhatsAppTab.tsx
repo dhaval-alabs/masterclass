@@ -5,7 +5,7 @@ import {
   Loader2, Send, CheckCircle, AlertCircle,
   Plus, Trash2, BarChart2, ChevronDown, ChevronUp,
   RotateCcw, MessageSquare, Phone, Copy, FlaskConical,
-  RefreshCw, Search, Eye, Ban, X, Shield,
+  RefreshCw, Search, Eye, Ban, X, Shield, ExternalLink,
 } from "lucide-react";
 
 type Audience = "verified" | "unverified" | "all";
@@ -16,6 +16,7 @@ interface WaCampaign {
   languageCode: string;
   audience: Audience;
   variables: string[];
+  headerImageUrl: string | null;
   status: "draft" | "sending" | "sent" | "partial" | "failed";
   totalRecipients: number;
   sentCount: number;
@@ -25,12 +26,18 @@ interface WaCampaign {
   sentAt: string | null;
 }
 
+interface WaTemplateButton {
+  type: string;            // URL | QUICK_REPLY | PHONE_NUMBER
+  text?: string;
+  url?: string;
+  phone_number?: string;
+}
 interface WaTemplate {
   name: string;
   status: string;
   language: string;
   category: string;
-  components: { type: string; text?: string }[];
+  components: { type: string; text?: string; buttons?: WaTemplateButton[] }[];
 }
 
 interface RecipientPreview {
@@ -58,6 +65,23 @@ interface WaSendLog {
   sentAt: string;
   deliveredAt: string | null;
   readAt: string | null;
+}
+
+interface WaCampaignStats {
+  total: number;
+  sent: number;        // dispatched: sent | delivered | read
+  delivered: number;   // delivered | read
+  read: number;
+  failed: number;
+  skipped: number;
+  deliveryRate: number;  // delivered / sent
+  readRate: number;      // read / delivered
+  failureRate: number;   // failed / total
+  failureReasons: { reason: string; count: number }[];
+  skippedReasons: { reason: string; count: number }[];
+  avgTimeToDeliveredMs: number | null;
+  avgTimeToReadMs: number | null;
+  hasDeliveryData: boolean;
 }
 
 const AUDIENCE_OPTIONS: { value: Audience; label: string; description: string; active: string; inactive: string }[] = [
@@ -98,6 +122,56 @@ function pct(n: number, d: number) {
   return Math.round((n / d) * 1000) / 10;
 }
 
+// Reduce per-recipient logs into a campaign stats object. WhatsApp statuses are
+// cumulative (a 'read' row was also delivered + sent), so the funnel is monotonic.
+function computeWaStats(logs: WaSendLog[]): WaCampaignStats {
+  const total = logs.length;
+  const sent      = logs.filter(l => l.status === "sent" || l.status === "delivered" || l.status === "read").length;
+  const delivered = logs.filter(l => l.status === "delivered" || l.status === "read").length;
+  const read      = logs.filter(l => l.status === "read").length;
+  const failed    = logs.filter(l => l.status === "failed").length;
+  const skipped   = logs.filter(l => l.status === "skipped").length;
+
+  const group = (rows: WaSendLog[]) => {
+    const m = new Map<string, number>();
+    for (const r of rows) {
+      const key = (r.errorDetail || "Unknown").trim();
+      m.set(key, (m.get(key) ?? 0) + 1);
+    }
+    return [...m.entries()].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count);
+  };
+
+  const avg = (rows: WaSendLog[], pick: (l: WaSendLog) => string | null) => {
+    const deltas = rows
+      .map(l => { const end = pick(l); return end && l.sentAt ? new Date(end).getTime() - new Date(l.sentAt).getTime() : null; })
+      .filter((d): d is number => d !== null && d >= 0);
+    if (!deltas.length) return null;
+    return Math.round(deltas.reduce((a, b) => a + b, 0) / deltas.length);
+  };
+
+  return {
+    total, sent, delivered, read, failed, skipped,
+    deliveryRate: pct(delivered, sent),
+    readRate:     pct(read, delivered),
+    failureRate:  pct(failed, total),
+    failureReasons: group(logs.filter(l => l.status === "failed")),
+    skippedReasons: group(logs.filter(l => l.status === "skipped")),
+    avgTimeToDeliveredMs: avg(logs, l => l.deliveredAt),
+    avgTimeToReadMs:      avg(logs, l => l.readAt),
+    hasDeliveryData: delivered > 0 || read > 0,
+  };
+}
+
+function formatDuration(ms: number | null): string {
+  if (ms === null) return "—";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
 function StatusBadge({ status }: { status: WaCampaign["status"] }) {
   const map: Record<WaCampaign["status"], { label: string; cls: string }> = {
     draft:   { label: "Draft",    cls: "bg-slate-100 text-slate-600" },
@@ -108,6 +182,19 @@ function StatusBadge({ status }: { status: WaCampaign["status"] }) {
   };
   const { label, cls } = map[status] ?? map.draft;
   return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${cls}`}>{label}</span>;
+}
+
+// Template category badge. MARKETING is flagged amber because it is subject to
+// WhatsApp's per-user frequency cap; UTILITY/AUTHENTICATION are exempt.
+function CategoryBadge({ category }: { category: string }) {
+  const c = (category || "").toUpperCase();
+  const map: Record<string, string> = {
+    MARKETING:      "bg-amber-50 text-amber-700",
+    UTILITY:        "bg-blue-50 text-blue-700",
+    AUTHENTICATION: "bg-slate-100 text-slate-600",
+  };
+  const label = c.charAt(0) + c.slice(1).toLowerCase();
+  return <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold ${map[c] ?? "bg-slate-100 text-slate-500"}`}>{label || "—"}</span>;
 }
 
 function LogStatusDot({ status }: { status: WaSendLog["status"] }) {
@@ -211,6 +298,9 @@ export default function WhatsAppTab() {
   const [templateName, setTemplateName] = useState("");
   const [languageCode, setLanguageCode] = useState("en_US");
   const [variables, setVariables]       = useState<string[]>([""]);
+  const [headerImageUrl, setHeaderImageUrl] = useState("");
+  const [isUploadingHeader, setIsUploadingHeader] = useState(false);
+  const [headerUploadError, setHeaderUploadError] = useState<string | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<WaTemplate | null>(null);
 
   const [preview, setPreview]                   = useState<RecipientPreview | null>(null);
@@ -254,6 +344,7 @@ export default function WhatsAppTab() {
   const [logsTab, setLogsTab]                       = useState<Record<string, "stats" | "recipients">>({});
   const [campaignLogs, setCampaignLogs]             = useState<Record<string, WaSendLog[]>>({});
   const [isLoadingLogs, setIsLoadingLogs]           = useState<string | null>(null);
+  const [lastLogsRefresh, setLastLogsRefresh]       = useState<Date | null>(null);
 
   const [retryingId, setRetryingId]     = useState<string | null>(null);
   const [retryResults, setRetryResults] = useState<Record<string, { kind: "ok" | "err"; text: string }>>({});
@@ -313,14 +404,16 @@ export default function WhatsAppTab() {
     } finally { setIsLoadingOptouts(false); }
   }, []);
 
-  const loadCampaignLogs = useCallback(async (campaignId: string) => {
-    if (campaignLogs[campaignId]) return;
-    setIsLoadingLogs(campaignId);
+  const loadCampaignLogs = useCallback(async (campaignId: string, force = false) => {
+    if (!force && campaignLogs[campaignId]) return;
+    // Only show the full-panel spinner on first load; background refreshes stay silent.
+    if (!campaignLogs[campaignId]) setIsLoadingLogs(campaignId);
     try {
       const res = await fetch(`/api/admin/whatsapp/campaigns/${campaignId}/logs`);
       if (res.ok) {
         const data = await res.json();
         setCampaignLogs(prev => ({ ...prev, [campaignId]: data.logs ?? [] }));
+        setLastLogsRefresh(new Date());
       }
     } finally { setIsLoadingLogs(null); }
   }, [campaignLogs]);
@@ -347,7 +440,19 @@ export default function WhatsAppTab() {
   }, []);
 
   useEffect(() => { loadPreview(audience); }, [audience, loadPreview]);
-  useEffect(() => { loadCampaigns(); loadDailyCount(); }, [loadCampaigns, loadDailyCount]);
+  useEffect(() => { loadCampaigns(); loadDailyCount(); loadOptouts(); }, [loadCampaigns, loadDailyCount, loadOptouts]);
+
+  // Auto-refresh logs for an expanded, recently-sent campaign so delivered/read
+  // statuses (which trickle in via webhook) update live. Stops on collapse.
+  useEffect(() => {
+    if (!expandedId) return;
+    const c = campaigns.find(x => x.id === expandedId);
+    if (!c || (c.status !== "sent" && c.status !== "partial")) return;
+    const sentRecently = c.sentAt ? (Date.now() - new Date(c.sentAt).getTime()) < 24 * 60 * 60 * 1000 : false;
+    if (!sentRecently) return;
+    const id = setInterval(() => { loadCampaignLogs(expandedId, true); }, 30_000);
+    return () => clearInterval(id);
+  }, [expandedId, campaigns, loadCampaignLogs]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleSend = async () => {
@@ -362,14 +467,14 @@ export default function WhatsAppTab() {
       const res = await fetch("/api/admin/whatsapp/campaigns", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateName, languageCode, audience, variables }),
+        body: JSON.stringify({ templateName, languageCode, audience, variables, headerImageUrl }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       const kind = !data.configured ? "warn" : data.success ? "ok" : "err";
       const errorDetail = data.errors?.length ? ` — ${data.errors[0]}` : "";
       setSendResult({ kind, text: data.message + errorDetail });
-      if (data.success) { setTemplateName(""); setVariables([""]); setSelectedTemplate(null); }
+      if (data.success) { setTemplateName(""); setVariables([""]); setHeaderImageUrl(""); setSelectedTemplate(null); }
       loadCampaigns();
       loadDailyCount();
     } catch (err) {
@@ -389,7 +494,7 @@ export default function WhatsAppTab() {
       const res = await fetch("/api/admin/whatsapp/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toPhone: testPhone.trim(), templateName, languageCode, variables }),
+        body: JSON.stringify({ toPhone: testPhone.trim(), templateName, languageCode, variables, headerImageUrl }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -397,6 +502,21 @@ export default function WhatsAppTab() {
     } catch (err) {
       setTestResult({ kind: "err", text: err instanceof Error ? err.message : "Send failed" });
     } finally { setIsSendingTest(false); }
+  };
+
+  const handleHeaderUpload = async (file: File) => {
+    setHeaderUploadError(null);
+    setIsUploadingHeader(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`);
+      setHeaderImageUrl(data.url);
+    } catch (err) {
+      setHeaderUploadError(err instanceof Error ? err.message : "Upload failed");
+    } finally { setIsUploadingHeader(false); }
   };
 
   const handleRetry = async (campaignId: string) => {
@@ -420,6 +540,7 @@ export default function WhatsAppTab() {
     setLanguageCode(c.languageCode);
     setAudience(c.audience);
     setVariables(c.variables.length > 0 ? c.variables : [""]);
+    setHeaderImageUrl(c.headerImageUrl ?? "");
     setSelectedTemplate(null);
     setSendResult(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -576,7 +697,7 @@ export default function WhatsAppTab() {
                                 <span className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold ${statusColors[t.status] ?? "bg-slate-100 text-slate-500"}`}>{t.status}</span>
                               </div>
                               <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mt-0.5">
-                                <span>{t.category}</span><span>·</span><span>{t.language}</span>
+                                <CategoryBadge category={t.category} /><span>·</span><span>{t.language}</span>
                               </div>
                               {body?.text && <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed italic line-clamp-2">{body.text}</p>}
                             </button>
@@ -596,10 +717,23 @@ export default function WhatsAppTab() {
                 )}
 
                 {templateName ? (
-                  <div className="flex items-center justify-between mt-1">
-                    <p className="text-[11px] text-[#00875A] flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Selected</p>
-                    <button type="button" onClick={() => { setTemplateName(""); setSelectedTemplate(null); }}
-                      className="text-[11px] text-slate-400 hover:text-red-500 transition-colors">Clear</button>
+                  <div className="mt-1 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] text-[#00875A] flex items-center gap-1.5">
+                        <CheckCircle className="w-3 h-3" /> Selected
+                        {selectedTemplate && <CategoryBadge category={selectedTemplate.category} />}
+                      </p>
+                      <button type="button" onClick={() => { setTemplateName(""); setSelectedTemplate(null); }}
+                        className="text-[11px] text-slate-400 hover:text-red-500 transition-colors">Clear</button>
+                    </div>
+                    {selectedTemplate?.category?.toUpperCase() === "MARKETING" && (
+                      <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 leading-relaxed">
+                        Marketing template — subject to WhatsApp&apos;s per-user frequency cap. A recipient who recently received marketing messages may not get it. For reminders to registrants, a Utility template delivers more reliably.
+                      </p>
+                    )}
+                    {selectedTemplate?.category?.toUpperCase() === "UTILITY" && (
+                      <p className="text-[11px] text-blue-700">Utility template — exempt from the marketing frequency cap.</p>
+                    )}
                   </div>
                 ) : (
                   <>
@@ -650,11 +784,53 @@ export default function WhatsAppTab() {
               </p>
             </div>
 
-            {/* Variable preview */}
-            {variablePreviewText && (
+            {/* Header image (only for templates with an IMAGE header) */}
+            <div>
+              <label className="text-xs font-semibold text-slate-500">Header image <span className="font-normal text-slate-400">· only if the template has an image header</span></label>
+              {headerImageUrl ? (
+                <div className="mt-2 flex items-center gap-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={headerImageUrl} alt="Header" className="w-16 h-16 object-cover rounded-lg border border-slate-200" />
+                  <a href={headerImageUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-[#003368] underline truncate flex-1">{headerImageUrl}</a>
+                  <button type="button" onClick={() => setHeaderImageUrl("")}
+                    className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Remove">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <label className={`mt-2 flex items-center justify-center gap-2 w-full border border-dashed border-slate-300 rounded-lg px-3 py-3 text-sm cursor-pointer hover:border-[#00DF83] hover:bg-[#00DF83]/5 transition-colors ${isUploadingHeader ? "opacity-60 pointer-events-none" : ""}`}>
+                  {isUploadingHeader
+                    ? <><Loader2 className="w-4 h-4 animate-spin text-slate-400" /> Uploading…</>
+                    : <><Plus className="w-4 h-4" /> Upload header image</>}
+                  <input type="file" accept="image/*" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleHeaderUpload(f); e.currentTarget.value = ""; }} />
+                </label>
+              )}
+              {headerUploadError && <p className="text-[11px] text-red-500 mt-2">{headerUploadError}</p>}
+              <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+                Leave blank for text-only / no-header templates. Upload the banner when the selected template uses an image header.
+              </p>
+            </div>
+
+            {/* Message preview — WhatsApp-style bubble (image header + body) */}
+            {(variablePreviewText || headerImageUrl) && (
               <div className="bg-[#25D366]/5 border border-[#25D366]/30 rounded-xl p-4">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-[#1da851] mb-2">Message preview</p>
-                <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{variablePreviewText}</p>
+                <div className="max-w-[18rem] bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                  {headerImageUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={headerImageUrl} alt="Header" className="w-full max-h-48 object-cover" />
+                  )}
+                  {variablePreviewText && (
+                    <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap p-3">{variablePreviewText}</p>
+                  )}
+                  {selectedTemplate?.components.find(c => c.type === "BUTTONS")?.buttons?.map((b, i) => (
+                    <div key={i} className="border-t border-slate-100 py-2.5 text-center text-sm font-medium text-[#00a5f4] flex items-center justify-center gap-1.5">
+                      {(b.type === "URL" || b.type === "PHONE_NUMBER") && <ExternalLink className="w-3.5 h-3.5" />}
+                      {b.text}
+                    </div>
+                  ))}
+                </div>
                 <p className="text-[10px] text-slate-400 mt-2">
                   <code className="bg-slate-100 px-1 rounded">{"{name}"}</code> will be replaced with each recipient&apos;s first name.
                 </p>
@@ -815,6 +991,24 @@ export default function WhatsAppTab() {
           <button onClick={loadCampaigns} className="text-xs text-slate-500 hover:text-[#003368] font-semibold">Refresh</button>
         </div>
 
+        {/* Account-level KPI strip (all-time, from the loaded campaign list) */}
+        {campaigns.length > 0 && (
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
+            {[
+              { label: "Campaigns",  value: campaigns.length },
+              { label: "Recipients", value: campaigns.reduce((s, c) => s + c.totalRecipients, 0) },
+              { label: "Sent",       value: campaigns.reduce((s, c) => s + c.sentCount, 0) },
+              { label: "Failed",     value: campaigns.reduce((s, c) => s + c.failedCount, 0) },
+              { label: "Opted out",  value: optouts.length },
+            ].map(m => (
+              <div key={m.label} className="bg-white rounded-lg border border-slate-200 px-3 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{m.label}</p>
+                <p className="text-lg font-extrabold tabular-nums text-[#003368]">{m.value.toLocaleString()}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
         {isLoadingCampaigns ? (
           <div className="py-8 flex justify-center"><Loader2 className="w-5 h-5 text-[#00DF83] animate-spin" /></div>
         ) : campaigns.length === 0 ? (
@@ -889,27 +1083,117 @@ export default function WhatsAppTab() {
 
                       {tab === "stats" && (
                         <div className="px-5 pb-5 pt-4 space-y-4">
+                          {/* Refresh / last-updated */}
+                          <div className="flex items-center justify-between">
+                            <p className="text-[10px] text-slate-400">
+                              {isExpanded && lastLogsRefresh ? `Updated ${lastLogsRefresh.toLocaleTimeString()} · auto-refreshes every 30s` : ""}
+                            </p>
+                            <button onClick={() => loadCampaignLogs(c.id, true)}
+                              className="flex items-center gap-1 text-xs text-slate-500 hover:text-[#003368] font-semibold">
+                              <RefreshCw className="w-3 h-3" /> Refresh
+                            </button>
+                          </div>
+
                           {(c.status === "failed" || c.status === "partial") && c.errorSummary && (
                             <div className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
                               <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                               <div><span className="font-bold">Error: </span>{c.errorSummary}</div>
                             </div>
                           )}
-                          <div className="grid grid-cols-3 gap-3">
-                            {[
-                              { label: "Recipients", value: c.totalRecipients, color: "text-[#003368]" },
-                              { label: "Sent",       value: c.sentCount,       color: "text-[#00875A]" },
-                              { label: "Failed",     value: c.failedCount,     color: c.failedCount > 0 ? "text-red-600" : "text-slate-400" },
-                            ].map(m => (
-                              <div key={m.label} className="bg-white rounded-xl border border-slate-200 p-4 text-center">
-                                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">{m.label}</p>
-                                <p className={`text-2xl font-extrabold tabular-nums ${m.color}`}>{m.value.toLocaleString()}</p>
-                                {m.label === "Sent" && c.totalRecipients > 0 && (
-                                  <p className="text-[11px] text-slate-400 mt-0.5">{pct(c.sentCount, c.totalRecipients)}%</p>
+
+                          {(isLoadingLogs === c.id || !logs) ? (
+                            <div className="py-6 flex justify-center"><Loader2 className="w-4 h-4 text-[#00DF83] animate-spin" /></div>
+                          ) : (() => {
+                            const stats = computeWaStats(logs);
+                            const funnel = [
+                              { label: "Recipients", value: stats.total,     show: true,                  rate: null,                color: "text-[#003368]", bar: "bg-[#003368]" },
+                              { label: "Sent",       value: stats.sent,      show: true,                  rate: null,                color: "text-blue-600",  bar: "bg-blue-400" },
+                              { label: "Delivered",  value: stats.delivered, show: stats.hasDeliveryData, rate: stats.deliveryRate,  color: "text-[#00875A]", bar: "bg-[#00DF83]" },
+                              { label: "Read",        value: stats.read,      show: stats.hasDeliveryData, rate: stats.readRate,      color: "text-[#00875A]", bar: "bg-[#00875A]" },
+                            ];
+                            return (
+                              <div className="space-y-4">
+                                {/* Funnel */}
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                  {funnel.map(m => (
+                                    <div key={m.label} className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+                                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">{m.label}</p>
+                                      <p className={`text-2xl font-extrabold tabular-nums ${m.show ? m.color : "text-slate-300"}`}>
+                                        {m.show ? m.value.toLocaleString() : "—"}
+                                      </p>
+                                      {m.show && m.rate !== null && <p className="text-[11px] text-slate-400 mt-0.5">{m.rate}%</p>}
+                                      {m.show && stats.total > 0 && (
+                                        <div className="mt-2 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                                          <div className={`h-full rounded-full ${m.bar}`} style={{ width: `${pct(m.value, stats.total)}%` }} />
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+
+                                {/* Failed / Skipped */}
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Failed</p>
+                                    <p className={`text-2xl font-extrabold tabular-nums ${stats.failed > 0 ? "text-red-600" : "text-slate-400"}`}>{stats.failed.toLocaleString()}</p>
+                                    {stats.failed > 0 && <p className="text-[11px] text-slate-400 mt-0.5">{stats.failureRate}%</p>}
+                                  </div>
+                                  <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Skipped</p>
+                                    <p className={`text-2xl font-extrabold tabular-nums ${stats.skipped > 0 ? "text-amber-600" : "text-slate-400"}`}>{stats.skipped.toLocaleString()}</p>
+                                  </div>
+                                </div>
+
+                                {/* Webhook-pending hint */}
+                                {!stats.hasDeliveryData && stats.sent > 0 && (
+                                  <div className="flex items-start gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5">
+                                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                    <div>Delivery tracking pending — enable the WhatsApp webhook to see delivered &amp; read counts.</div>
+                                  </div>
+                                )}
+
+                                {/* Timing */}
+                                {stats.hasDeliveryData && (
+                                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-600">
+                                    <span><span className="font-semibold">Avg. to delivered:</span> {formatDuration(stats.avgTimeToDeliveredMs)}</span>
+                                    <span><span className="font-semibold">Avg. to read:</span> {formatDuration(stats.avgTimeToReadMs)}</span>
+                                  </div>
+                                )}
+
+                                {/* Failure reasons */}
+                                {stats.failureReasons.length > 0 && (
+                                  <div>
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Failure reasons</p>
+                                    <div className="space-y-1">
+                                      {stats.failureReasons.map(r => (
+                                        <div key={r.reason} className="flex items-center justify-between text-xs bg-white border border-slate-200 rounded-lg px-3 py-1.5">
+                                          <span className="text-red-700 truncate pr-2">{r.reason}</span>
+                                          <span className="tabular-nums font-semibold text-slate-600 shrink-0">{r.count}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Skipped reasons */}
+                                {stats.skippedReasons.length > 0 && (
+                                  <div>
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Skipped reasons</p>
+                                    <div className="space-y-1">
+                                      {stats.skippedReasons.map(r => (
+                                        <div key={r.reason} className="flex items-center justify-between text-xs bg-white border border-slate-200 rounded-lg px-3 py-1.5">
+                                          <span className="text-amber-700 truncate pr-2">{r.reason}</span>
+                                          <span className="tabular-nums font-semibold text-slate-600 shrink-0">{r.count}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
                                 )}
                               </div>
-                            ))}
-                          </div>
+                            );
+                          })()}
+
+                          {/* Metadata */}
                           <div className="text-xs text-slate-500 space-y-0.5">
                             <p><span className="font-semibold">Template:</span> <code className="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-[11px]">{c.templateName}</code></p>
                             <p><span className="font-semibold">Language:</span> {c.languageCode}</p>

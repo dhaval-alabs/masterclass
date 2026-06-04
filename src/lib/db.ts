@@ -2506,6 +2506,8 @@ export interface WhatsAppCampaign {
   languageCode: string;
   audience: 'verified' | 'unverified' | 'all';
   variables: string[];
+  // Optional header image URL for templates with an IMAGE header.
+  headerImageUrl: string | null;
   status: 'draft' | 'sending' | 'sent' | 'partial' | 'failed';
   totalRecipients: number;
   sentCount: number;
@@ -2523,6 +2525,7 @@ function mapWhatsAppCampaign(r: Record<string, unknown>): WhatsAppCampaign {
     languageCode:     r.language_code as string,
     audience:         r.audience as WhatsAppCampaign['audience'],
     variables:        (r.variables as string[]) ?? [],
+    headerImageUrl:   (r.header_image_url as string | null) ?? null,
     status:           r.status as WhatsAppCampaign['status'],
     totalRecipients:  (r.total_recipients as number) ?? 0,
     sentCount:        (r.sent_count as number) ?? 0,
@@ -2539,6 +2542,7 @@ export async function createWhatsAppCampaign(params: {
   languageCode: string;
   audience: 'verified' | 'unverified' | 'all';
   variables: string[];
+  headerImageUrl?: string | null;
   totalRecipients: number;
   status?: WhatsAppCampaign['status'];
 }): Promise<WhatsAppCampaign> {
@@ -2551,6 +2555,7 @@ export async function createWhatsAppCampaign(params: {
       language_code:    params.languageCode,
       audience:         params.audience,
       variables:        params.variables,
+      header_image_url: params.headerImageUrl ?? null,
       total_recipients: params.totalRecipients,
       status:           params.status ?? 'draft',
     })

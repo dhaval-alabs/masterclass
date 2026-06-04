@@ -31,6 +31,7 @@ export async function POST(
       languageCode: campaign.languageCode,
       variables: campaign.variables,
       recipients,
+      headerImageUrl: campaign.headerImageUrl,
     });
 
     const finalStatus =

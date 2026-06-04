@@ -4,12 +4,13 @@ import { getBroadcastCreds } from '@/lib/whatsapp';
 const GRAPH_API_VERSION = 'v22.0';
 
 export async function POST(req: NextRequest) {
-  let body: { toPhone?: string; templateName?: string; languageCode?: string; variables?: string[] };
+  let body: { toPhone?: string; templateName?: string; languageCode?: string; variables?: string[]; headerImageUrl?: string };
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
   const { toPhone, templateName, languageCode = 'en_US', variables = [] } = body;
+  const headerImageUrl = body.headerImageUrl?.trim() || null;
   if (!toPhone?.trim())       return NextResponse.json({ error: 'toPhone is required' },       { status: 400 });
   if (!templateName?.trim())  return NextResponse.json({ error: 'templateName is required' },  { status: 400 });
 
@@ -20,9 +21,13 @@ export async function POST(req: NextRequest) {
 
   // Replace {name} with "Preview" for test sends.
   const resolvedVars = variables.map(v => v.replace(/\{name\}/gi, 'Preview'));
-  const components = resolvedVars.length > 0
-    ? [{ type: 'body', parameters: resolvedVars.map(text => ({ type: 'text', text })) }]
-    : [];
+  const components: unknown[] = [];
+  if (headerImageUrl) {
+    components.push({ type: 'header', parameters: [{ type: 'image', image: { link: headerImageUrl } }] });
+  }
+  if (resolvedVars.length > 0) {
+    components.push({ type: 'body', parameters: resolvedVars.map(text => ({ type: 'text', text })) });
+  }
 
   // Accept with or without country code.
   const phone = toPhone.trim().replace(/\D/g, '');
