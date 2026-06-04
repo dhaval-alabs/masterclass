@@ -6,6 +6,7 @@ import {
   Plus, Trash2, BarChart2, ChevronDown, ChevronUp,
   RotateCcw, MessageSquare, Phone, Copy, FlaskConical,
   RefreshCw, Search, Eye, Ban, X, Shield, ExternalLink,
+  CalendarClock, Clock,
 } from "lucide-react";
 
 type Audience = "verified" | "unverified" | "all";
@@ -17,13 +18,14 @@ interface WaCampaign {
   audience: Audience;
   variables: string[];
   headerImageUrl: string | null;
-  status: "draft" | "sending" | "sent" | "partial" | "failed";
+  status: "draft" | "scheduled" | "sending" | "sent" | "partial" | "failed";
   totalRecipients: number;
   sentCount: number;
   failedCount: number;
   errorSummary: string | null;
   createdAt: string;
   sentAt: string | null;
+  scheduledFor: string | null;
 }
 
 interface WaTemplateButton {
@@ -37,7 +39,12 @@ interface WaTemplate {
   status: string;
   language: string;
   category: string;
-  components: { type: string; text?: string; buttons?: WaTemplateButton[] }[];
+  components: { type: string; format?: string; text?: string; buttons?: WaTemplateButton[] }[];
+}
+
+// True when the selected template has an IMAGE header (requires a header image at send time).
+function templateNeedsHeaderImage(t: WaTemplate | null): boolean {
+  return !!t?.components.some(c => c.type === "HEADER" && (c.format ?? "").toUpperCase() === "IMAGE");
 }
 
 interface RecipientPreview {
@@ -122,9 +129,24 @@ function pct(n: number, d: number) {
   return Math.round((n / d) * 1000) / 10;
 }
 
-// Reduce per-recipient logs into a campaign stats object. WhatsApp statuses are
-// cumulative (a 'read' row was also delivered + sent), so the funnel is monotonic.
-function computeWaStats(logs: WaSendLog[]): WaCampaignStats {
+// Retries / "send to new" append multiple log rows per recipient. Collapse to
+// ONE row per phone, keeping the best (furthest-along) status, so counts reflect
+// UNIQUE people. WhatsApp statuses are cumulative (read ⊃ delivered ⊃ sent).
+function dedupeLogsByPhone(rawLogs: WaSendLog[]): WaSendLog[] {
+  const rank: Record<string, number> = { read: 4, delivered: 3, sent: 2, failed: 1, skipped: 0 };
+  const best = new Map<string, WaSendLog>();
+  for (const l of rawLogs) {
+    const key = (l.phone || "").replace(/\D/g, "").slice(-10) || l.id;
+    const cur = best.get(key);
+    if (!cur || (rank[l.status] ?? -1) > (rank[cur.status] ?? -1)) best.set(key, l);
+  }
+  return [...best.values()];
+}
+
+// Reduce per-recipient logs into a campaign stats object (unique recipients).
+function computeWaStats(rawLogs: WaSendLog[]): WaCampaignStats {
+  const logs = dedupeLogsByPhone(rawLogs);
+
   const total = logs.length;
   const sent      = logs.filter(l => l.status === "sent" || l.status === "delivered" || l.status === "read").length;
   const delivered = logs.filter(l => l.status === "delivered" || l.status === "read").length;
@@ -174,8 +196,9 @@ function formatDuration(ms: number | null): string {
 
 function StatusBadge({ status }: { status: WaCampaign["status"] }) {
   const map: Record<WaCampaign["status"], { label: string; cls: string }> = {
-    draft:   { label: "Draft",    cls: "bg-slate-100 text-slate-600" },
-    sending: { label: "Sending…", cls: "bg-blue-50 text-blue-700" },
+    draft:     { label: "Draft",     cls: "bg-slate-100 text-slate-600" },
+    scheduled: { label: "Scheduled", cls: "bg-violet-50 text-violet-700" },
+    sending:   { label: "Sending…",  cls: "bg-blue-50 text-blue-700" },
     sent:    { label: "Sent",     cls: "bg-[#00DF83]/10 text-[#00875A]" },
     partial: { label: "Partial",  cls: "bg-amber-50 text-amber-700" },
     failed:  { label: "Failed",   cls: "bg-red-50 text-red-700" },
@@ -309,6 +332,11 @@ export default function WhatsAppTab() {
   const [isSending, setIsSending]   = useState(false);
   const [sendResult, setSendResult] = useState<{ kind: "ok" | "warn" | "err"; text: string } | null>(null);
 
+  // Scheduling: when scheduleFor is set (datetime-local string), the send is deferred to the cron.
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduleFor, setScheduleFor]         = useState("");
+  const [schedulingId, setSchedulingId]       = useState<string | null>(null);
+
   const [testPhone, setTestPhone]         = useState("");
   const [isSendingTest, setIsSendingTest] = useState(false);
   const [testResult, setTestResult]       = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -345,9 +373,14 @@ export default function WhatsAppTab() {
   const [campaignLogs, setCampaignLogs]             = useState<Record<string, WaSendLog[]>>({});
   const [isLoadingLogs, setIsLoadingLogs]           = useState<string | null>(null);
   const [lastLogsRefresh, setLastLogsRefresh]       = useState<Date | null>(null);
+  const [isReconciling, setIsReconciling]           = useState(false);
+  const [reconcileMsg, setReconcileMsg]             = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   const [retryingId, setRetryingId]     = useState<string | null>(null);
   const [retryResults, setRetryResults] = useState<Record<string, { kind: "ok" | "err"; text: string }>>({});
+  const [sendingNewId, setSendingNewId]   = useState<string | null>(null);
+  const [sendNewResults, setSendNewResults] = useState<Record<string, { kind: "ok" | "err"; text: string }>>({});
+  const [retryFailedId, setRetryFailedId] = useState<string | null>(null);
 
   // ── Loaders ──────────────────────────────────────────────────────────────
   const loadPreview = useCallback(async (aud: Audience) => {
@@ -461,20 +494,41 @@ export default function WhatsAppTab() {
       setTimeout(() => setSendResult(null), 4000);
       return;
     }
+    if (templateNeedsHeaderImage(selectedTemplate) && !headerImageUrl.trim()) {
+      setSendResult({ kind: "err", text: "This template has an image header — upload a header image above before sending." });
+      return;
+    }
+    // Validate the schedule time client-side for a friendlier message.
+    let scheduledForIso: string | undefined;
+    if (scheduleEnabled) {
+      if (!scheduleFor) {
+        setSendResult({ kind: "err", text: "Pick a date & time to schedule, or turn scheduling off to send now." });
+        return;
+      }
+      const when = new Date(scheduleFor);
+      if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now() + 30_000) {
+        setSendResult({ kind: "err", text: "Schedule time must be at least a minute in the future." });
+        return;
+      }
+      scheduledForIso = when.toISOString();
+    }
     setIsSending(true);
     setSendResult(null);
     try {
       const res = await fetch("/api/admin/whatsapp/campaigns", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateName, languageCode, audience, variables, headerImageUrl }),
+        body: JSON.stringify({ templateName, languageCode, audience, variables, headerImageUrl, scheduledFor: scheduledForIso }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       const kind = !data.configured ? "warn" : data.success ? "ok" : "err";
       const errorDetail = data.errors?.length ? ` — ${data.errors[0]}` : "";
       setSendResult({ kind, text: data.message + errorDetail });
-      if (data.success) { setTemplateName(""); setVariables([""]); setHeaderImageUrl(""); setSelectedTemplate(null); }
+      if (data.success) {
+        setTemplateName(""); setVariables([""]); setHeaderImageUrl(""); setSelectedTemplate(null);
+        setScheduleEnabled(false); setScheduleFor("");
+      }
       loadCampaigns();
       loadDailyCount();
     } catch (err) {
@@ -482,10 +536,45 @@ export default function WhatsAppTab() {
     } finally { setIsSending(false); }
   };
 
+  // Cancel a scheduled campaign (revert to draft so it won't fire).
+  const handleCancelSchedule = async (campaignId: string) => {
+    setSchedulingId(campaignId);
+    setSendNewResults(prev => { const n = { ...prev }; delete n[campaignId]; return n; });
+    try {
+      const res = await fetch(`/api/admin/whatsapp/campaigns/${campaignId}/schedule`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: "ok", text: data.message } }));
+      loadCampaigns();
+    } catch (err) {
+      setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: "err", text: err instanceof Error ? err.message : "Failed" } }));
+    } finally { setSchedulingId(null); }
+  };
+
+  // Fire a scheduled campaign immediately instead of waiting for its time.
+  const handleSendNow = async (campaignId: string) => {
+    setSchedulingId(campaignId);
+    setSendNewResults(prev => { const n = { ...prev }; delete n[campaignId]; return n; });
+    try {
+      const res = await fetch(`/api/admin/whatsapp/campaigns/${campaignId}/schedule`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: data.success ? "ok" : "err", text: data.message } }));
+      loadCampaigns();
+      loadDailyCount();
+    } catch (err) {
+      setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: "err", text: err instanceof Error ? err.message : "Failed" } }));
+    } finally { setSchedulingId(null); }
+  };
+
   const handleSendTest = async () => {
     if (!testPhone.trim()) return;
     if (!templateName.trim()) {
       setTestResult({ kind: "err", text: "Enter a template name first." });
+      return;
+    }
+    if (templateNeedsHeaderImage(selectedTemplate) && !headerImageUrl.trim()) {
+      setTestResult({ kind: "err", text: "This template has an image header — upload a header image above first." });
       return;
     }
     setIsSendingTest(true);
@@ -523,7 +612,10 @@ export default function WhatsAppTab() {
     setRetryingId(campaignId);
     setRetryResults(prev => { const n = { ...prev }; delete n[campaignId]; return n; });
     try {
-      const res = await fetch(`/api/admin/whatsapp/campaigns/${campaignId}/retry`, { method: "POST" });
+      const res = await fetch(`/api/admin/whatsapp/campaigns/${campaignId}/retry`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ headerImageUrl: headerImageUrl.trim() || undefined }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       const errorDetail = data.errors?.length ? ` — ${data.errors[0]}` : "";
@@ -533,6 +625,61 @@ export default function WhatsAppTab() {
     } catch (err) {
       setRetryResults(prev => ({ ...prev, [campaignId]: { kind: "err", text: err instanceof Error ? err.message : "Retry failed" } }));
     } finally { setRetryingId(null); }
+  };
+
+  const handleSendNew = async (campaignId: string) => {
+    setSendingNewId(campaignId);
+    setSendNewResults(prev => { const n = { ...prev }; delete n[campaignId]; return n; });
+    try {
+      const res = await fetch(`/api/admin/whatsapp/campaigns/${campaignId}/send-new`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ headerImageUrl: headerImageUrl.trim() || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const errorDetail = data.errors?.length ? ` — ${data.errors[0]}` : "";
+      setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: "ok", text: data.message + errorDetail } }));
+      loadCampaigns();
+      loadDailyCount();
+    } catch (err) {
+      setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: "err", text: err instanceof Error ? err.message : "Failed" } }));
+    } finally { setSendingNewId(null); }
+  };
+
+  const handleRetryFailed = async (campaignId: string) => {
+    setRetryFailedId(campaignId);
+    setSendNewResults(prev => { const n = { ...prev }; delete n[campaignId]; return n; });
+    try {
+      const res = await fetch(`/api/admin/whatsapp/campaigns/${campaignId}/retry-failed`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ headerImageUrl: headerImageUrl.trim() || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const errorDetail = data.errors?.length ? ` — ${data.errors[0]}` : "";
+      setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: "ok", text: data.message + errorDetail } }));
+      loadCampaigns();
+      loadDailyCount();
+    } catch (err) {
+      setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: "err", text: err instanceof Error ? err.message : "Failed" } }));
+    } finally { setRetryFailedId(null); }
+  };
+
+  // Recompute every campaign's Sent/Failed/Total from the deduped send log,
+  // so the cards match the Stats panel (undoes retry-inflated counters).
+  const handleReconcile = async () => {
+    setIsReconciling(true);
+    setReconcileMsg(null);
+    try {
+      const res = await fetch("/api/admin/whatsapp/campaigns/reconcile", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setReconcileMsg({ kind: "ok", text: data.message });
+      loadCampaigns();
+      loadDailyCount();
+    } catch (err) {
+      setReconcileMsg({ kind: "err", text: err instanceof Error ? err.message : "Failed" });
+    } finally { setIsReconciling(false); }
   };
 
   const handleLoad = (c: WaCampaign) => {
@@ -879,11 +1026,36 @@ export default function WhatsAppTab() {
             )}
           </div>
 
+          {/* Schedule */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={scheduleEnabled}
+                onChange={e => setScheduleEnabled(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300 text-[#003368] focus:ring-[#003368]" />
+              <CalendarClock className="w-4 h-4 text-violet-600" />
+              <span className="text-sm font-semibold text-slate-700">Schedule for later</span>
+            </label>
+            {scheduleEnabled && (
+              <div className="mt-3 space-y-1.5">
+                <input type="datetime-local" value={scheduleFor}
+                  onChange={e => setScheduleFor(e.target.value)}
+                  className="w-full sm:w-auto border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[#003368] focus:border-[#003368]" />
+                <p className="text-[11px] text-slate-500 leading-snug">
+                  The audience is recalculated when it sends, so anyone who registers before then is included automatically. Runs in your browser&apos;s local time; the cron fires within ~5 min of this time.
+                </p>
+              </div>
+            )}
+          </div>
+
           {/* Send + Simulate */}
           <div className="flex items-center gap-3 flex-wrap">
             <button type="button" onClick={handleSend} disabled={isSending}
-              className="flex items-center gap-2 bg-[#25D366] hover:bg-[#1da851] text-white font-bold py-2.5 px-6 rounded-lg text-sm transition-all disabled:opacity-60">
-              {isSending ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending…</> : <><Send className="w-4 h-4" /> Send Campaign</>}
+              className={`flex items-center gap-2 text-white font-bold py-2.5 px-6 rounded-lg text-sm transition-all disabled:opacity-60 ${scheduleEnabled ? "bg-violet-600 hover:bg-violet-700" : "bg-[#25D366] hover:bg-[#1da851]"}`}>
+              {isSending
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> {scheduleEnabled ? "Scheduling…" : "Sending…"}</>
+                : scheduleEnabled
+                  ? <><CalendarClock className="w-4 h-4" /> Schedule Campaign</>
+                  : <><Send className="w-4 h-4" /> Send Campaign</>}
             </button>
             <button type="button" onClick={loadSimulation} disabled={isLoadingSimulation}
               className="flex items-center gap-2 bg-white border border-slate-200 hover:border-slate-300 text-slate-700 font-semibold py-2.5 px-4 rounded-lg text-sm transition-all disabled:opacity-60">
@@ -986,9 +1158,23 @@ export default function WhatsAppTab() {
 
       {/* ── Campaign history ──────────────────────────────────────────── */}
       <div>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
           <h3 className="text-sm font-bold text-[#003368]">Campaign history</h3>
-          <button onClick={loadCampaigns} className="text-xs text-slate-500 hover:text-[#003368] font-semibold">Refresh</button>
+          <div className="flex items-center gap-3">
+            {reconcileMsg && (
+              <span className={`text-xs font-semibold flex items-center gap-1 ${reconcileMsg.kind === "ok" ? "text-[#00875A]" : "text-red-600"}`}>
+                {reconcileMsg.kind === "ok" ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                {reconcileMsg.text}
+              </span>
+            )}
+            <button onClick={handleReconcile} disabled={isReconciling}
+              className="flex items-center gap-1 text-xs text-slate-500 hover:text-[#003368] font-semibold disabled:opacity-50"
+              title="Recompute Sent/Failed/Total for every campaign from the send log (dedupes retry attempts) so the cards match the Stats panel.">
+              {isReconciling ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+              {isReconciling ? "Fixing…" : "Fix counts"}
+            </button>
+            <button onClick={loadCampaigns} className="text-xs text-slate-500 hover:text-[#003368] font-semibold">Refresh</button>
+          </div>
         </div>
 
         {/* Account-level KPI strip (all-time, from the loaded campaign list) */}
@@ -1021,6 +1207,8 @@ export default function WhatsAppTab() {
               const isExpanded = expandedId === c.id;
               const tab = logsTab[c.id] ?? "stats";
               const logs = campaignLogs[c.id];
+              // Unique recipients (one row per phone, best status) for the list + counts.
+              const uniqueLogs = logs ? dedupeLogsByPhone(logs) : undefined;
               return (
                 <div key={c.id} className={idx > 0 ? "border-t border-slate-200" : ""}>
                   <div className="flex items-center gap-3 px-5 py-3 bg-white hover:bg-slate-50 transition-colors">
@@ -1040,14 +1228,51 @@ export default function WhatsAppTab() {
                         {c.sentCount.toLocaleString()}/{c.totalRecipients.toLocaleString()} <span className="font-normal text-slate-400">sent</span>
                       </span>
                       {c.sentAt && <><span className="text-slate-400">·</span><span className="text-slate-400">{new Date(c.sentAt).toLocaleDateString()}</span></>}
+                      {c.status === "scheduled" && c.scheduledFor && (
+                        <><span className="text-slate-400">·</span>
+                          <span className="flex items-center gap-1 text-violet-700 font-semibold">
+                            <Clock className="w-3 h-3" /> Sends {new Date(c.scheduledFor).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}
+                          </span></>
+                      )}
                     </div>
                     <StatusBadge status={c.status} />
+                    {c.status === "scheduled" && (
+                      <>
+                        <button onClick={() => handleSendNow(c.id)} disabled={schedulingId === c.id}
+                          className="flex items-center gap-1 text-xs font-semibold text-violet-700 hover:text-violet-800 bg-violet-50 hover:bg-violet-100 border border-violet-200 px-2 py-1 rounded-md transition-colors shrink-0 disabled:opacity-60"
+                          title="Send this campaign right now instead of waiting">
+                          {schedulingId === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                          Send now
+                        </button>
+                        <button onClick={() => handleCancelSchedule(c.id)} disabled={schedulingId === c.id}
+                          className="flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded-md transition-colors shrink-0 disabled:opacity-60"
+                          title="Cancel the schedule (reverts to draft — will not send)">
+                          <X className="w-3.5 h-3.5" /> Cancel
+                        </button>
+                      </>
+                    )}
                     {(c.status === "failed" || c.status === "partial") && (
                       <button onClick={() => handleRetry(c.id)} disabled={retryingId === c.id}
                         className="flex items-center gap-1 text-xs font-semibold text-red-700 hover:text-red-800 bg-red-50 hover:bg-red-100 border border-red-200 px-2 py-1 rounded-md transition-colors shrink-0 disabled:opacity-60"
                         title="Re-send to all recipients">
                         {retryingId === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
-                        Retry
+                        Retry all
+                      </button>
+                    )}
+                    {(c.status === "failed" || c.status === "partial") && (
+                      <button onClick={() => handleRetryFailed(c.id)} disabled={retryFailedId === c.id}
+                        className="flex items-center gap-1 text-xs font-semibold text-orange-700 hover:text-orange-800 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-2 py-1 rounded-md transition-colors shrink-0 disabled:opacity-60"
+                        title="Re-send only to recipients who failed in this campaign (still in the audience)">
+                        {retryFailedId === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                        Retry failed
+                      </button>
+                    )}
+                    {(c.status === "sent" || c.status === "partial" || c.status === "failed") && (
+                      <button onClick={() => handleSendNew(c.id)} disabled={sendingNewId === c.id}
+                        className="flex items-center gap-1 text-xs font-semibold text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-1 rounded-md transition-colors shrink-0 disabled:opacity-60"
+                        title="Send only to registrants who haven't been successfully reached yet (new + previously failed)">
+                        {sendingNewId === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                        Send to new
                       </button>
                     )}
                     <button onClick={() => handleLoad(c)}
@@ -1069,6 +1294,13 @@ export default function WhatsAppTab() {
                     </div>
                   )}
 
+                  {sendNewResults[c.id] && (
+                    <div className={`px-5 py-2 text-xs font-semibold flex items-center gap-1.5 border-t border-slate-200 ${sendNewResults[c.id].kind === "ok" ? "bg-[#00DF83]/8 text-[#00875A]" : "bg-red-50 text-red-700"}`}>
+                      {sendNewResults[c.id].kind === "ok" ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                      {sendNewResults[c.id].text}
+                    </div>
+                  )}
+
                   {isExpanded && (
                     <div className="bg-slate-50 border-t border-slate-200">
                       {/* Tabs */}
@@ -1076,7 +1308,7 @@ export default function WhatsAppTab() {
                         {(["stats", "recipients"] as const).map(t => (
                           <button key={t} onClick={() => setLogsTab(prev => ({ ...prev, [c.id]: t }))}
                             className={`px-3 py-2.5 text-xs font-semibold capitalize transition-colors border-b-2 -mb-px ${tab === t ? "border-[#003368] text-[#003368]" : "border-transparent text-slate-400 hover:text-slate-600"}`}>
-                            {t === "recipients" ? `Recipients${logs ? ` (${logs.length})` : ""}` : "Stats"}
+                            {t === "recipients" ? `Recipients${uniqueLogs ? ` (${uniqueLogs.length})` : ""}` : "Stats"}
                           </button>
                         ))}
                       </div>
@@ -1207,7 +1439,7 @@ export default function WhatsAppTab() {
                         <div className="px-5 pb-5 pt-4">
                           {isLoadingLogs === c.id ? (
                             <div className="py-6 flex justify-center"><Loader2 className="w-4 h-4 text-[#00DF83] animate-spin" /></div>
-                          ) : !logs || logs.length === 0 ? (
+                          ) : !uniqueLogs || uniqueLogs.length === 0 ? (
                             <p className="text-xs text-slate-400 text-center py-4">No per-recipient log available for this campaign.</p>
                           ) : (
                             <div className="rounded-lg border border-slate-200 overflow-hidden bg-white">
@@ -1218,7 +1450,7 @@ export default function WhatsAppTab() {
                                 <span>Time</span>
                               </div>
                               <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
-                                {logs.map(log => (
+                                {uniqueLogs.map(log => (
                                   <div key={log.id} className="grid grid-cols-[auto_1fr_auto_auto] gap-0 items-center px-4 py-2 hover:bg-slate-50 transition-colors">
                                     <LogStatusDot status={log.status} />
                                     <div className="pl-2 min-w-0">
@@ -1237,7 +1469,7 @@ export default function WhatsAppTab() {
                               </div>
                               <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 flex gap-4 text-[11px] text-slate-500">
                                 {(["sent", "delivered", "read", "failed", "skipped"] as WaSendLog["status"][]).map(s => {
-                                  const cnt = logs.filter(l => l.status === s).length;
+                                  const cnt = uniqueLogs.filter(l => l.status === s).length;
                                   if (!cnt) return null;
                                   return <span key={s}><span className="font-semibold capitalize">{s}</span>: {cnt}</span>;
                                 })}

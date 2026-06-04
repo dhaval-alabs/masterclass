@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { addRegistration, getRegistrationsPaginated, getRegistrationStats } from '@/lib/db';
+import { addRegistration, getRegistrationsPaginated, getUniqueRegistrationsPaginated, getRegistrationStats } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 
 async function requireAdmin(): Promise<boolean> {
@@ -18,9 +18,14 @@ export async function GET(request: Request) {
   const pageSize = parseInt(url.searchParams.get('pageSize') ?? '50', 10) || 50;
   const wantStats = url.searchParams.get('stats') === '1';
   const scoreFilter = url.searchParams.get('score') || null;
+  // Collapse a person's repeat attempts into one row by default; pass
+  // unique=0 to see every raw submission.
+  const unique = url.searchParams.get('unique') !== '0';
 
   const [pageRes, stats] = await Promise.all([
-    getRegistrationsPaginated(page, pageSize, null, scoreFilter),
+    unique
+      ? getUniqueRegistrationsPaginated(page, pageSize, null, scoreFilter)
+      : getRegistrationsPaginated(page, pageSize, null, scoreFilter),
     wantStats ? getRegistrationStats() : Promise.resolve(null),
   ]);
 

@@ -22,6 +22,9 @@ export interface Registration {
   whatsappError?: string | null;
   verifiedAt?: string | null;
   attemptNumber?: number | null;
+  // Only set in the "group repeat attempts" (unique) view: how many rows
+  // for this person were collapsed into this one. 1 = no duplicates.
+  attemptCount?: number | null;
   // Attendance (populated by /api/admin/zoom/sync-attendance)
   attended?: boolean | null;
   attendedAt?: string | null;
@@ -991,6 +994,75 @@ export async function getRegistrationsPaginated(
     };
   } catch (err) {
     console.error('[db.getRegistrationsPaginated]', err);
+    return { data: [], total: 0, page: safePage, pageSize: safeSize };
+  }
+}
+
+/**
+ * Like getRegistrationsPaginated, but collapses a person's multiple form
+ * submissions into a SINGLE row (display-only — nothing is deleted). The
+ * "keeper" per person is their Verified row if any, otherwise their most
+ * recent attempt; `attemptCount` records how many rows were collapsed.
+ *
+ * People are grouped by normalized email (falling back to digits-only phone
+ * when there's no email), matching the "unique people" stat counts.
+ */
+export async function getUniqueRegistrationsPaginated(
+  page: number = 1,
+  pageSize: number = 50,
+  sessionId?: string | null,
+  scoreFilter?: string | null,
+): Promise<RegistrationsPage> {
+  const safePage = Math.max(1, Math.floor(page));
+  const safeSize = Math.max(1, Math.min(200, Math.floor(pageSize)));
+  try {
+    let query = client()
+      .from('registrations')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(20000);
+    if (sessionId) query = query.eq('session_id', sessionId);
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const normEmail = (e: string) => (e ?? '').trim().toLowerCase();
+    const normPhone = (p: string) => (p ?? '').replace(/\D/g, '');
+
+    // Group by email (fallback phone). Rows arrive newest-first.
+    const groups = new Map<string, RegistrationRow[]>();
+    for (const row of (data ?? []) as RegistrationRow[]) {
+      const key = normEmail(row.email) || `phone:${normPhone(row.phone)}` || `id:${row.id}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(row);
+    }
+
+    // One keeper per group: Verified first, else newest (already desc).
+    let keepers = Array.from(groups.values()).map(rows => {
+      const verified = rows.find(r => r.status === 'Verified');
+      const keeper = verified ?? rows[0];
+      return { ...mapRegistration(keeper), attemptCount: rows.length };
+    });
+
+    // Apply the lead-score filter on the keeper, mirroring the SQL path.
+    if (scoreFilter === 'unscored') {
+      keepers = keepers.filter(r => r.status === 'Verified' && (r.leadScore == null));
+    } else if (scoreFilter && ['hot', 'warm', 'cold', 'junk'].includes(scoreFilter)) {
+      keepers = keepers.filter(r => r.leadScore === scoreFilter);
+    }
+
+    // Newest-first by the keeper's created date.
+    keepers.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+    const total = keepers.length;
+    const from = (safePage - 1) * safeSize;
+    return {
+      data: keepers.slice(from, from + safeSize),
+      total,
+      page: safePage,
+      pageSize: safeSize,
+    };
+  } catch (err) {
+    console.error('[db.getUniqueRegistrationsPaginated]', err);
     return { data: [], total: 0, page: safePage, pageSize: safeSize };
   }
 }
@@ -2508,13 +2580,15 @@ export interface WhatsAppCampaign {
   variables: string[];
   // Optional header image URL for templates with an IMAGE header.
   headerImageUrl: string | null;
-  status: 'draft' | 'sending' | 'sent' | 'partial' | 'failed';
+  status: 'draft' | 'scheduled' | 'sending' | 'sent' | 'partial' | 'failed';
   totalRecipients: number;
   sentCount: number;
   failedCount: number;
   errorSummary: string | null;
   createdAt: string;
   sentAt: string | null;
+  // When set (and status === 'scheduled'), the cron fires this campaign at/after this time.
+  scheduledFor: string | null;
 }
 
 function mapWhatsAppCampaign(r: Record<string, unknown>): WhatsAppCampaign {
@@ -2533,6 +2607,7 @@ function mapWhatsAppCampaign(r: Record<string, unknown>): WhatsAppCampaign {
     errorSummary:     (r.error_summary as string | null) ?? null,
     createdAt:        r.created_at as string,
     sentAt:           (r.sent_at as string | null) ?? null,
+    scheduledFor:     (r.scheduled_for as string | null) ?? null,
   };
 }
 
@@ -2545,6 +2620,7 @@ export async function createWhatsAppCampaign(params: {
   headerImageUrl?: string | null;
   totalRecipients: number;
   status?: WhatsAppCampaign['status'];
+  scheduledFor?: string | null;
 }): Promise<WhatsAppCampaign> {
   const { data, error } = await client()
     .schema('excel_to_ai')
@@ -2558,6 +2634,7 @@ export async function createWhatsAppCampaign(params: {
       header_image_url: params.headerImageUrl ?? null,
       total_recipients: params.totalRecipients,
       status:           params.status ?? 'draft',
+      scheduled_for:    params.scheduledFor ?? null,
     })
     .select()
     .single();
@@ -2567,7 +2644,7 @@ export async function createWhatsAppCampaign(params: {
 
 export async function updateWhatsAppCampaign(
   id: string,
-  updates: Partial<Pick<WhatsAppCampaign, 'status' | 'sentCount' | 'failedCount' | 'errorSummary' | 'sentAt' | 'totalRecipients'>>,
+  updates: Partial<Pick<WhatsAppCampaign, 'status' | 'sentCount' | 'failedCount' | 'errorSummary' | 'sentAt' | 'totalRecipients' | 'headerImageUrl' | 'scheduledFor'>>,
 ): Promise<void> {
   const row: Record<string, unknown> = {};
   if (updates.status          !== undefined) row.status           = updates.status;
@@ -2576,6 +2653,8 @@ export async function updateWhatsAppCampaign(
   if (updates.errorSummary    !== undefined) row.error_summary    = updates.errorSummary;
   if (updates.sentAt          !== undefined) row.sent_at          = updates.sentAt;
   if (updates.totalRecipients !== undefined) row.total_recipients = updates.totalRecipients;
+  if (updates.headerImageUrl  !== undefined) row.header_image_url = updates.headerImageUrl;
+  if (updates.scheduledFor    !== undefined) row.scheduled_for    = updates.scheduledFor;
   const { error } = await client()
     .schema('excel_to_ai')
     .from('whatsapp_campaigns')
@@ -2605,6 +2684,20 @@ export async function getWhatsAppCampaignById(id: string): Promise<WhatsAppCampa
   if (error) throw error;
   if (!data) return null;
   return mapWhatsAppCampaign(data as Record<string, unknown>);
+}
+
+/** Scheduled campaigns whose fire time has passed — picked up by the cron. */
+export async function getDueScheduledWhatsAppCampaigns(limit = 25): Promise<WhatsAppCampaign[]> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_campaigns')
+    .select('*')
+    .eq('status', 'scheduled')
+    .lte('scheduled_for', new Date().toISOString())
+    .order('scheduled_for', { ascending: true })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []).map(r => mapWhatsAppCampaign(r as Record<string, unknown>));
 }
 
 // ── WhatsApp opt-outs ──────────────────────────────────────────────────────────
@@ -2717,16 +2810,116 @@ export async function getWhatsAppCampaignLogs(
   }));
 }
 
-/** Count of 'sent' entries in whatsapp_send_log where sent_at >= today UTC midnight. */
+/**
+ * Recomputes a campaign's stored counters (total_recipients / sent_count /
+ * failed_count / status) from its send log, deduped to ONE row per phone
+ * (best/furthest-along status wins). This undoes the drift caused by retries
+ * incrementing the raw counters, so the card matches the deduped Stats panel.
+ *
+ * Skips campaigns with no log rows (draft / scheduled) so we never zero them out.
+ * Returns the new counts, or null if nothing was reconciled.
+ */
+export async function reconcileWhatsAppCampaignCounters(
+  campaignId: string,
+): Promise<{ total: number; sent: number; failed: number; skipped: number; status: WhatsAppCampaign['status'] } | null> {
+  const logs = await getWhatsAppCampaignLogs(campaignId);
+  if (logs.length === 0) return null;
+
+  // One row per phone, keeping the furthest-along status (mirrors the UI).
+  const rank: Record<string, number> = { read: 4, delivered: 3, sent: 2, failed: 1, skipped: 0 };
+  const best = new Map<string, string>();
+  for (const l of logs) {
+    const key = (l.phone || '').replace(/\D/g, '').slice(-10) || l.id;
+    const cur = best.get(key);
+    if (cur === undefined || (rank[l.status] ?? -1) > (rank[cur] ?? -1)) best.set(key, l.status);
+  }
+
+  const statuses = [...best.values()];
+  const total   = statuses.length;
+  const sent    = statuses.filter(s => s === 'sent' || s === 'delivered' || s === 'read').length;
+  const failed  = statuses.filter(s => s === 'failed').length;
+  const skipped = statuses.filter(s => s === 'skipped').length;
+
+  const status: WhatsAppCampaign['status'] =
+    sent === 0 ? 'failed' :
+    failed === 0 && skipped === 0 ? 'sent' : 'partial';
+
+  await updateWhatsAppCampaign(campaignId, {
+    totalRecipients: total,
+    sentCount: sent,
+    failedCount: failed,
+    status,
+  });
+
+  return { total, sent, failed, skipped, status };
+}
+
+// Recipients in the audience who have NOT already been logged for this WhatsApp
+// campaign (i.e. new registrants since it was sent). Mirrors getUnemailedRegistrations.
+// Phones are compared on their last 10 digits so 91-prefix variants still match.
+export async function getUnsentWhatsAppRegistrations(
+  campaignId: string,
+  audience: 'verified' | 'unverified' | 'all',
+  sessionId?: string | null,
+): Promise<EmailRecipient[]> {
+  // Only exclude phones that were SUCCESSFULLY sent (sent/delivered/read).
+  // People whose previous attempt failed/was skipped are still "unsent" and
+  // should be re-targeted, alongside genuinely new registrants.
+  const { data: sent } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_log')
+    .select('phone,status')
+    .eq('campaign_id', campaignId)
+    .in('status', ['sent', 'delivered', 'read']);
+
+  const norm = (p: string) => (p || '').replace(/\D/g, '').slice(-10);
+  const sentPhones = new Set((sent ?? []).map(r => norm(r.phone as string)));
+
+  const all = await getEmailRecipients(audience, sessionId);
+  return all.filter(r => r.phone?.trim() && !sentPhones.has(norm(r.phone)));
+}
+
+// Recipients who FAILED in this campaign (best status = failed, i.e. never
+// successfully sent) AND are still in the audience — so a re-send never reaches
+// someone who has since verified / left the audience.
+export async function getFailedWhatsAppRecipients(
+  campaignId: string,
+  audience: 'verified' | 'unverified' | 'all',
+  sessionId?: string | null,
+): Promise<EmailRecipient[]> {
+  const { data } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_log')
+    .select('phone,status')
+    .eq('campaign_id', campaignId);
+
+  const norm = (p: string) => (p || '').replace(/\D/g, '').slice(-10);
+  const rank: Record<string, number> = { read: 4, delivered: 3, sent: 2, failed: 1, skipped: 0 };
+  const best = new Map<string, string>();
+  for (const r of data ?? []) {
+    const k = norm(r.phone as string); if (!k) continue;
+    const s = r.status as string;
+    if (!best.has(k) || (rank[s] ?? -1) > (rank[best.get(k)!] ?? -1)) best.set(k, s);
+  }
+  const failedPhones = new Set([...best.entries()].filter(([, s]) => s === 'failed').map(([k]) => k));
+
+  const all = await getEmailRecipients(audience, sessionId);
+  return all.filter(r => r.phone?.trim() && failedPhones.has(norm(r.phone)));
+}
+
+// Count of UNIQUE phones successfully sent today (UTC). Deduped by phone so that
+// retries / "send to new" don't inflate the daily total — this mirrors WhatsApp's
+// own per-day UNIQUE-recipient messaging limit.
 export async function getWhatsAppDailySentCount(): Promise<number> {
   const todayUtcMidnight = new Date();
   todayUtcMidnight.setUTCHours(0, 0, 0, 0);
-  const { count, error } = await client()
+  const { data, error } = await client()
     .schema('excel_to_ai')
     .from('whatsapp_send_log')
-    .select('id', { count: 'exact', head: true })
-    .eq('status', 'sent')
+    .select('phone')
+    .in('status', ['sent', 'delivered', 'read'])
     .gte('sent_at', todayUtcMidnight.toISOString());
   if (error) throw error;
-  return count ?? 0;
+  const uniq = new Set((data ?? []).map(r => (r.phone as string || '').replace(/\D/g, '').slice(-10)));
+  return uniq.size;
 }

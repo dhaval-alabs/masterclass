@@ -97,6 +97,8 @@ export default function AdminPortal() {
   const [regPageSize, setRegPageSize] = useState(50);
   const [regTotal, setRegTotal] = useState(0);
   const [regScoreFilter, setRegScoreFilter] = useState<string>('');
+  // Collapse a person's repeat attempts into one row (default on).
+  const [regUnique, setRegUnique] = useState(true);
   const [regStats, setRegStats] = useState<{ total: number; verified: number; unverified: number; uniqueEmailsStarted: number; uniqueEmailsVerified: number; hot: number; warm: number; cold: number; junk: number; unscored: number } | null>(null);
 
   // Chat transcript modal
@@ -169,10 +171,10 @@ export default function AdminPortal() {
     fetch('/api/settings').then(res => res.json()).then(data => setSettings(data));
   }, []);
 
-  const loadRegistrations = (page = regPage, pageSize = regPageSize, scoreFilter = regScoreFilter) => {
+  const loadRegistrations = (page = regPage, pageSize = regPageSize, scoreFilter = regScoreFilter, unique = regUnique) => {
     setIsLoadingRegs(true);
     const scoreParam = scoreFilter ? `&score=${encodeURIComponent(scoreFilter)}` : '';
-    fetch(`/api/register?page=${page}&pageSize=${pageSize}&stats=1${scoreParam}`)
+    fetch(`/api/register?page=${page}&pageSize=${pageSize}&stats=1&unique=${unique ? 1 : 0}${scoreParam}`)
       .then(res => res.json())
       .then((res: { data: any[]; total: number; stats?: typeof regStats }) => {
         setRegistrations(Array.isArray(res?.data) ? res.data : []);
@@ -902,6 +904,23 @@ export default function AdminPortal() {
                 >
                   {showBreakdown ? 'Hide breakdown' : 'Score by city'}
                 </button>
+                <label
+                  className="flex items-center gap-2 ml-auto text-xs font-semibold text-slate-600 cursor-pointer select-none"
+                  title="Show one row per person (their latest attempt). Turn off to see every raw form submission."
+                >
+                  <input
+                    type="checkbox"
+                    checked={regUnique}
+                    onChange={e => {
+                      const v = e.target.checked;
+                      setRegUnique(v);
+                      setRegPage(1);
+                      loadRegistrations(1, regPageSize, regScoreFilter, v);
+                    }}
+                    className="w-4 h-4 rounded border-slate-300 text-[#003368] focus:ring-[#003368]"
+                  />
+                  Group repeat attempts
+                </label>
               </div>
 
               {/* City breakdown table */}
@@ -975,13 +994,28 @@ export default function AdminPortal() {
                           const overrideState = scoreOverrides[reg.id];
                           const isRescoring = !!rescoring[reg.id];
                           const currentScore = overrideState?.value ?? reg.leadScore ?? '';
-                          const isRepeat = (reg.attemptNumber ?? 1) > 1;
+                          // In grouped view attemptCount > 1 means duplicates were collapsed;
+                          // in raw view attemptNumber > 1 flags a repeat submission.
+                          const attemptCount = reg.attemptCount ?? null;
+                          const isRepeat = (attemptCount ?? reg.attemptNumber ?? 1) > 1;
                           return (
                             <tr key={reg.id} className={`hover:bg-slate-50 transition-colors ${isRepeat ? 'bg-amber-50/30' : ''}`}>
                               {/* Date */}
                               <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">{new Date(reg.createdAt).toLocaleString()}</td>
                               {/* Name */}
-                              <td className="px-4 py-3 font-medium text-[#003368]">{reg.fullName}</td>
+                              <td className="px-4 py-3 font-medium text-[#003368]">
+                                <span className="flex items-center gap-1.5">
+                                  {reg.fullName}
+                                  {regUnique && attemptCount != null && attemptCount > 1 && (
+                                    <span
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 border border-amber-200"
+                                      title={`${attemptCount} registration attempts collapsed — showing the latest. Use "Clean Duplicates" to remove the extra rows.`}
+                                    >
+                                      ×{attemptCount}
+                                    </span>
+                                  )}
+                                </span>
+                              </td>
                               {/* Email */}
                               <td className="px-4 py-3 text-slate-600 text-xs">{reg.email}</td>
                               {/* Phone */}

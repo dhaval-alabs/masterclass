@@ -16,7 +16,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  let body: { templateName?: string; languageCode?: string; audience?: string; variables?: string[]; headerImageUrl?: string };
+  let body: { templateName?: string; languageCode?: string; audience?: string; variables?: string[]; headerImageUrl?: string; scheduledFor?: string };
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
@@ -30,6 +30,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'audience must be verified | unverified | all' }, { status: 400 });
   }
   const aud = audience as 'verified' | 'unverified' | 'all';
+
+  // Optional scheduling: a future ISO timestamp defers the send to the cron.
+  let scheduledFor: string | null = null;
+  if (body.scheduledFor?.trim()) {
+    const when = new Date(body.scheduledFor);
+    if (Number.isNaN(when.getTime())) {
+      return NextResponse.json({ error: 'scheduledFor is not a valid date' }, { status: 400 });
+    }
+    if (when.getTime() <= Date.now() + 30_000) {
+      return NextResponse.json({ error: 'scheduledFor must be at least a minute in the future' }, { status: 400 });
+    }
+    scheduledFor = when.toISOString();
+  }
 
   const broadcastCreds = getBroadcastCreds();
   const configured = !!broadcastCreds.waAccessToken && !!broadcastCreds.waPhoneId;
@@ -52,6 +65,29 @@ export async function POST(req: NextRequest) {
         status: 'draft',
       });
       return NextResponse.json({ success: true, campaign, configured: false, message: `Saved as draft. WhatsApp broadcast credentials not configured.` });
+    }
+
+    // Scheduled: persist now, let the cron fire it. Audience is recomputed at
+    // fire time, so totalRecipients here is just an at-scheduling estimate.
+    if (scheduledFor) {
+      const campaign = await createWhatsAppCampaign({
+        sessionId: session?.id ?? null,
+        templateName: templateName.trim(),
+        languageCode,
+        audience: aud,
+        variables,
+        headerImageUrl,
+        totalRecipients: recipients.length,
+        status: 'scheduled',
+        scheduledFor,
+      });
+      return NextResponse.json({
+        success: true,
+        campaign,
+        configured: true,
+        scheduled: true,
+        message: `Scheduled for ${new Date(scheduledFor).toLocaleString()} — will send to the ${aud} audience at that time (≈${recipients.length} now).`,
+      });
     }
 
     if (recipients.length === 0) {

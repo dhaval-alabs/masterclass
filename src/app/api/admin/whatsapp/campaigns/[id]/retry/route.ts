@@ -3,10 +3,13 @@ import { getWhatsAppCampaignById, getEmailRecipients, updateWhatsAppCampaign, ge
 import { sendWhatsAppCampaign } from '@/lib/whatsapp';
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  // Optional header-image override — lets you fix campaigns that were created
+  // without an image (image-header templates) without recreating them.
+  const overrideImage = await req.json().then(b => (b?.headerImageUrl as string | undefined)?.trim() || null).catch(() => null);
 
   try {
     const campaign = await getWhatsAppCampaignById(id);
@@ -14,6 +17,7 @@ export async function POST(
     if (campaign.status === 'sending') return NextResponse.json({ error: 'Campaign is already sending' }, { status: 409 });
     if (campaign.status === 'sent') return NextResponse.json({ error: 'Campaign already sent successfully' }, { status: 409 });
 
+    const headerImageUrl = overrideImage ?? campaign.headerImageUrl;
     await updateWhatsAppCampaign(campaign.id, { status: 'sending' });
 
     const session = await getActiveWebinarSession();
@@ -31,7 +35,7 @@ export async function POST(
       languageCode: campaign.languageCode,
       variables: campaign.variables,
       recipients,
-      headerImageUrl: campaign.headerImageUrl,
+      headerImageUrl,
     });
 
     const finalStatus =
@@ -45,6 +49,8 @@ export async function POST(
       totalRecipients: recipients.length,
       errorSummary:    result.errors.length ? result.errors.slice(0, 3).join(' | ') : null,
       sentAt:          new Date().toISOString(),
+      // Persist a newly-provided image so future retries/send-new reuse it.
+      ...(overrideImage ? { headerImageUrl } : {}),
     });
 
     return NextResponse.json({
