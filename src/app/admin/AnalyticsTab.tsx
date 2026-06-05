@@ -13,6 +13,7 @@ interface Overview {
     remindedAttendRate: number; notRemindedAttendRate: number;
     byLeadScore: { score: string; total: number; reminded: number; attended: number }[];
   };
+  bestTime: { grid: number[][]; max: number; topLabel: string | null };
 }
 
 const SCORE_META: Record<string, { label: string; color: string }> = {
@@ -80,7 +81,8 @@ export default function AnalyticsTab() {
   }
   if (!data) return null;
 
-  const { email, whatsapp: wa, optouts, whatsappDaily, funnel } = data;
+  const { email, whatsapp: wa, optouts, whatsappDaily, funnel, bestTime } = data;
+  const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   // Headline KPIs.
   const totalReached = email.sent + wa.sent;
@@ -208,6 +210,39 @@ export default function AnalyticsTab() {
             })}
           </div>
           <p className="text-[10px] text-slate-400 mt-2">Light bar = reached · solid green = attended.</p>
+        </div>
+      )}
+
+      {/* Best time to send — engagement heatmap (IST) */}
+      {bestTime.max > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-sm font-bold text-[#003368]">Best time to send</h3>
+            {bestTime.topLabel && <span className="text-xs font-semibold text-[#00875A]">Peak: {bestTime.topLabel}</span>}
+          </div>
+          <p className="text-[11px] text-slate-400 mb-3">When recipients engage (WhatsApp reads + email opens), by day &amp; hour — your local time (IST).</p>
+          <div className="overflow-x-auto">
+            <div className="inline-block min-w-full">
+              {bestTime.grid.map((row, d) => (
+                <div key={d} className="flex items-center gap-0.5 mb-0.5">
+                  <span className="w-8 text-[10px] text-slate-400 shrink-0">{DOW[d]}</span>
+                  {row.map((count, h) => {
+                    const intensity = bestTime.max ? count / bestTime.max : 0;
+                    const bg = count === 0 ? "#f1f5f9" : `rgba(0, 135, 90, ${0.15 + intensity * 0.85})`;
+                    return <div key={h} className="flex-1 h-4 rounded-[2px] min-w-[8px]" style={{ backgroundColor: bg }} title={`${DOW[d]} ${((h + 11) % 12) + 1}${h < 12 ? "AM" : "PM"}: ${count} engagements`} />;
+                  })}
+                </div>
+              ))}
+              <div className="flex pl-9 mt-1 justify-between text-[9px] text-slate-400">
+                <span>12 AM</span><span>6 AM</span><span>12 PM</span><span>6 PM</span><span>11 PM</span>
+              </div>
+            </div>
+          </div>
+          {bestTime.topLabel && (
+            <p className="text-xs text-slate-600 mt-3 bg-[#00DF83]/10 border border-[#00DF83]/30 rounded-lg px-3 py-2">
+              Recipients engage most around <span className="font-bold">{bestTime.topLabel}</span> — schedule reminders to land just before then.
+            </p>
+          )}
         </div>
       )}
 

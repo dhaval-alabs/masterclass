@@ -2908,6 +2908,8 @@ export interface AnalyticsOverview {
     notRemindedAttendRate: number;   // attended & not-reminded / not-reminded
     byLeadScore: { score: string; total: number; reminded: number; attended: number }[];
   };
+  // Engagement (WA reads + email opens) by IST day-of-week × hour, for a heatmap.
+  bestTime: { grid: number[][]; max: number; topLabel: string | null };
 }
 
 export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
@@ -2938,7 +2940,7 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
   const { data: waLog } = await supabase
     .schema('excel_to_ai')
     .from('whatsapp_send_log')
-    .select('campaign_id, phone, status');
+    .select('campaign_id, phone, status, read_at');
   const rank: Record<string, number> = { read: 4, delivered: 3, sent: 2, failed: 1, skipped: 0 };
   const best = new Map<string, string>();
   for (const r of waLog ?? []) {
@@ -2997,6 +2999,31 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
     .map(s => ({ score: s, ...(scoreMap.get(s) ?? { total: 0, reminded: 0, attended: 0 }) }))
     .filter(x => x.total > 0);
 
+  // ── Best time to send: engagement events (WA reads + email opens) by IST hour/day ──
+  const { data: emailOpens } = await supabase
+    .schema('excel_to_ai')
+    .from('email_events')
+    .select('occurred_at')
+    .eq('event_type', 'open');
+  const grid: number[][] = Array.from({ length: 7 }, () => new Array(24).fill(0));
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const addEvent = (iso: string | null | undefined) => {
+    if (!iso) return;
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return;
+    const ist = new Date(t + IST_OFFSET_MS);
+    grid[ist.getUTCDay()][ist.getUTCHours()]++;
+  };
+  for (const r of waLog ?? []) addEvent(r.read_at as string | null);
+  for (const r of emailOpens ?? []) addEvent(r.occurred_at as string | null);
+  let gMax = 0, gDow = -1, gHour = -1;
+  for (let d = 0; d < 7; d++) for (let h = 0; h < 24; h++) {
+    if (grid[d][h] > gMax) { gMax = grid[d][h]; gDow = d; gHour = h; }
+  }
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const fmtHour = (h: number) => `${((h + 11) % 12) + 1} ${h < 12 ? 'AM' : 'PM'}`;
+  const topLabel = gMax > 0 ? `${DOW[gDow]} ${fmtHour(gHour)}` : null;
+
   const { count: optouts } = await supabase
     .schema('excel_to_ai')
     .from('whatsapp_optouts')
@@ -3033,6 +3060,7 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
       notRemindedAttendRate: pctI(attendedNotReminded, notReminded),
       byLeadScore,
     },
+    bestTime: { grid, max: gMax, topLabel },
   };
 }
 
