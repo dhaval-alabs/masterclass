@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, RefreshCw, Mail, MessageSquare, Users, Ban, AlertCircle } from "lucide-react";
+import { Loader2, RefreshCw, Mail, MessageSquare, Users, Ban, AlertCircle, Download, Printer } from "lucide-react";
 
 interface Overview {
   email:    { campaigns: number; recipients: number; sent: number; opened: number; clicks: number; failed: number; openRate: number; clickRate: number };
@@ -84,6 +84,77 @@ export default function AnalyticsTab() {
   const { email, whatsapp: wa, optouts, whatsappDaily, funnel, bestTime } = data;
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+  const exportCsv = () => {
+    const rows: (string | number)[][] = [
+      ["AnalytixLabs — Campaign Analytics", new Date().toLocaleString()],
+      [],
+      ["Channel summary", "Email", "WhatsApp"],
+      ["Campaigns", email.campaigns, wa.campaigns],
+      ["Messages sent", email.sent, wa.sent],
+      ["Engaged (opened / read)", email.opened, wa.read],
+      ["Engagement rate %", email.openRate, wa.readRate],
+      ["Failed", email.failed, wa.failed],
+      [],
+      ["Webinar funnel", "Count", "% of registered"],
+      ["Registered", funnel.registered, 100],
+      ["Reminded", funnel.reminded, funnel.registered ? Math.round((funnel.reminded / funnel.registered) * 100) : 0],
+      ["Attended", funnel.attended, funnel.registered ? Math.round((funnel.attended / funnel.registered) * 100) : 0],
+      ["Reminded → attended %", funnel.remindedAttendRate, ""],
+      ["Not-reminded → attended %", funnel.notRemindedAttendRate, ""],
+      [],
+      ["Lead tier", "Total", "Reached", "Attended"],
+      ...funnel.byLeadScore.map(s => [s.score, s.total, s.reminded, s.attended]),
+      [],
+      ["Peak engagement time", bestTime.topLabel ?? "n/a"],
+      ["Opted out", optouts],
+    ];
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `analytics-summary-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const printSummary = () => {
+    const bar = (v: number, max: number, color: string) =>
+      `<div style="background:#f1f5f9;border-radius:6px;height:14px;overflow:hidden"><div style="width:${max ? Math.max(2, (v / max) * 100) : 0}%;height:100%;background:${color}"></div></div>`;
+    const fmax = funnel.registered || 1;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Campaign Analytics</title>
+      <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;max-width:760px;margin:24px auto;padding:0 16px}
+      h1{color:#003368;font-size:22px;margin:0} .sub{color:#64748b;font-size:13px;margin:2px 0 20px}
+      h2{color:#003368;font-size:15px;margin:22px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px}
+      .kpis{display:flex;gap:12px;flex-wrap:wrap} .kpi{flex:1;min-width:130px;border:1px solid #e2e8f0;border-radius:10px;padding:12px}
+      .kpi .n{font-size:26px;font-weight:800;color:#003368} .kpi .l{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em}
+      .row{display:flex;align-items:center;gap:10px;margin:6px 0;font-size:13px} .row .lab{width:200px;color:#475569} .row .bar{flex:1} .row .val{width:70px;text-align:right;font-weight:700}
+      table{width:100%;border-collapse:collapse;font-size:13px} td,th{border:1px solid #e2e8f0;padding:6px 8px;text-align:left} th{background:#f8fafc}
+      .note{background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:8px 12px;font-size:13px;margin-top:10px}</style></head><body>
+      <h1>AnalytixLabs — Campaign Analytics</h1><div class="sub">${new Date().toLocaleString()}</div>
+      <div class="kpis">
+        <div class="kpi"><div class="l">Messages sent</div><div class="n">${(email.sent + wa.sent).toLocaleString()}</div></div>
+        <div class="kpi"><div class="l">WhatsApp read</div><div class="n">${wa.readRate}%</div></div>
+        <div class="kpi"><div class="l">Email open</div><div class="n">${email.openRate}%</div></div>
+        <div class="kpi"><div class="l">Attended</div><div class="n">${funnel.attended.toLocaleString()}</div></div>
+      </div>
+      <h2>Webinar funnel</h2>
+      <div class="row"><span class="lab">Registered</span><span class="bar">${bar(funnel.registered, fmax, "#003368")}</span><span class="val">${funnel.registered.toLocaleString()}</span></div>
+      <div class="row"><span class="lab">Reminded</span><span class="bar">${bar(funnel.reminded, fmax, "#25D366")}</span><span class="val">${funnel.reminded.toLocaleString()}</span></div>
+      <div class="row"><span class="lab">Attended</span><span class="bar">${bar(funnel.attended, fmax, "#00875A")}</span><span class="val">${funnel.attended.toLocaleString()}</span></div>
+      ${funnel.attended > 0 ? `<div class="note"><b>${funnel.remindedAttendRate}%</b> of reminded people attended${funnel.notRemindedAttendRate > 0 ? ` vs <b>${funnel.notRemindedAttendRate}%</b> of those not reached.` : "."}</div>` : ""}
+      <h2>Email vs WhatsApp</h2>
+      <table><tr><th>Metric</th><th>Email</th><th>WhatsApp</th></tr>
+        <tr><td>Messages sent</td><td>${email.sent.toLocaleString()}</td><td>${wa.sent.toLocaleString()}</td></tr>
+        <tr><td>Engaged</td><td>${email.opened.toLocaleString()} opened</td><td>${wa.read.toLocaleString()} read</td></tr>
+        <tr><td>Engagement rate</td><td>${email.openRate}%</td><td>${wa.readRate}%</td></tr>
+        <tr><td>Failed</td><td>${email.failed.toLocaleString()}</td><td>${wa.failed.toLocaleString()}</td></tr></table>
+      <h2>By lead quality</h2>
+      <table><tr><th>Tier</th><th>Total</th><th>Reached</th><th>Attended</th></tr>
+        ${funnel.byLeadScore.map(s => `<tr><td>${s.score}</td><td>${s.total}</td><td>${s.reminded}</td><td>${s.attended}</td></tr>`).join("")}</table>
+      ${bestTime.topLabel ? `<div class="note">Recipients engage most around <b>${bestTime.topLabel}</b> — schedule reminders to land just before then.</div>` : ""}
+      <script>window.onload=function(){window.print()}</script></body></html>`;
+    const w = window.open("", "_blank");
+    if (w) { w.document.write(html); w.document.close(); }
+  };
+
   // Headline KPIs.
   const totalReached = email.sent + wa.sent;
   const totalCampaigns = email.campaigns + wa.campaigns;
@@ -100,6 +171,12 @@ export default function AnalyticsTab() {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-[11px] text-slate-400">{lastRefreshed ? `Updated ${lastRefreshed.toLocaleTimeString()}` : ""}</span>
+          <button onClick={exportCsv} className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-[#003368] border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white">
+            <Download className="w-3.5 h-3.5" /> CSV
+          </button>
+          <button onClick={printSummary} className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-[#003368] border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white">
+            <Printer className="w-3.5 h-3.5" /> Print / PDF
+          </button>
           <button onClick={load} disabled={loading} className="flex items-center gap-1.5 text-xs font-semibold text-[#003368] hover:text-[#002244] disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
           </button>
