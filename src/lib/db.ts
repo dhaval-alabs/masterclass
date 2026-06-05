@@ -2963,6 +2963,24 @@ export async function markWhatsAppQueueProcessed(ids: string[], status: 'sent' |
   if (error) throw error;
 }
 
+/** Cancel all pending queue rows for a campaign (used to STOP an in-progress send). */
+export async function cancelPendingWhatsAppQueue(campaignId: string): Promise<number> {
+  const { count } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_queue')
+    .select('*', { count: 'exact', head: true })
+    .eq('campaign_id', campaignId)
+    .eq('status', 'pending');
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_queue')
+    .update({ status: 'cancelled', processed_at: new Date().toISOString() })
+    .eq('campaign_id', campaignId)
+    .eq('status', 'pending');
+  if (error) throw error;
+  return count ?? 0;
+}
+
 /** Distinct campaign IDs that still have pending queue rows (for the cron). */
 export async function getCampaignIdsWithPendingQueue(limit = 500): Promise<string[]> {
   const { data, error } = await client()

@@ -1273,6 +1273,14 @@ export default function WhatsAppTab() {
                         Send
                       </button>
                     )}
+                    {c.status === "sending" && (
+                      <button onClick={() => handleCancelSchedule(c.id)} disabled={schedulingId === c.id}
+                        className="flex items-center gap-1 text-xs font-semibold text-red-700 hover:text-red-800 bg-red-50 hover:bg-red-100 border border-red-200 px-2 py-1 rounded-md transition-colors shrink-0 disabled:opacity-60"
+                        title="Stop this send — cancels all remaining queued recipients (those already sent are kept).">
+                        {schedulingId === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                        Stop
+                      </button>
+                    )}
                     {c.status === "scheduled" && (
                       <>
                         <button onClick={() => handleSendNow(c.id)} disabled={schedulingId === c.id}

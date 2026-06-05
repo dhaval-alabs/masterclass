@@ -1,6 +1,6 @@
 export const maxDuration = 300; // send-now runs the per-recipient loop
 import { NextRequest, NextResponse } from 'next/server';
-import { getWhatsAppCampaignById, updateWhatsAppCampaign } from '@/lib/db';
+import { getWhatsAppCampaignById, updateWhatsAppCampaign, cancelPendingWhatsAppQueue, getWhatsAppCampaignLogCounts } from '@/lib/db';
 import { fireWhatsAppCampaign } from '@/lib/whatsapp-campaign';
 
 // PATCH /api/admin/whatsapp/campaigns/:id/schedule
@@ -40,11 +40,30 @@ export async function DELETE(
   try {
     const campaign = await getWhatsAppCampaignById(id);
     if (!campaign) return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
-    if (campaign.status !== 'scheduled') {
-      return NextResponse.json({ error: `Only scheduled campaigns can be cancelled (this one is "${campaign.status}").` }, { status: 409 });
+
+    // Scheduled → just unschedule (revert to draft).
+    if (campaign.status === 'scheduled') {
+      await updateWhatsAppCampaign(id, { status: 'draft', scheduledFor: null });
+      return NextResponse.json({ success: true, message: 'Schedule cancelled — reverted to draft.' });
     }
-    await updateWhatsAppCampaign(id, { status: 'draft', scheduledFor: null });
-    return NextResponse.json({ success: true, message: 'Schedule cancelled — reverted to draft.' });
+
+    // Sending → STOP: cancel everything still queued and finalize from what was sent.
+    if (campaign.status === 'sending') {
+      const cancelled = await cancelPendingWhatsAppQueue(id);
+      const counts = await getWhatsAppCampaignLogCounts(id);
+      const status =
+        counts.sent > 0 ? (counts.failed > 0 ? 'partial' : 'sent') : 'draft';
+      await updateWhatsAppCampaign(id, {
+        status,
+        sentCount: counts.sent,
+        failedCount: counts.failed,
+        scheduledFor: null,
+        errorSummary: cancelled > 0 ? `Stopped — ${cancelled} remaining recipient(s) cancelled.` : null,
+      });
+      return NextResponse.json({ success: true, message: `Stopped — ${cancelled} queued recipient(s) cancelled. ${counts.sent} already sent.` });
+    }
+
+    return NextResponse.json({ error: `Nothing to cancel (campaign is "${campaign.status}").` }, { status: 409 });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
