@@ -86,9 +86,38 @@ interface WaCampaignStats {
   failureRate: number;   // failed / total
   failureReasons: { reason: string; count: number }[];
   skippedReasons: { reason: string; count: number }[];
+  // Plain-English "didn't receive it" breakdown (failed + skipped), with a fix.
+  notReceived: { reason: string; fix: string; count: number }[];
+  notReceivedTotal: number;
   avgTimeToDeliveredMs: number | null;
   avgTimeToReadMs: number | null;
   hasDeliveryData: boolean;
+}
+
+// Translates a raw WhatsApp/Meta send error into a plain-English reason + what to do.
+function explainWaError(detail: string): { reason: string; fix: string } {
+  const d = (detail || "").toLowerCase();
+  if (d.includes("132012") || d.includes("parameter format"))
+    return { reason: "The message template needed an image or value that wasn't included.", fix: "Load the campaign, add the header image, then resend." };
+  if (d.includes("opted out"))
+    return { reason: "This person unsubscribed from your WhatsApp messages.", fix: "Leave them out — they chose to opt out." };
+  if (d.includes("invalid phone") || d.includes("not a valid"))
+    return { reason: "The phone number isn't a valid mobile number.", fix: "Fix or remove the number in Registrations." };
+  if (d.includes("daily limit") || d.includes("daily send") || d.includes("131056") || d.includes("rate limit"))
+    return { reason: "The daily sending limit was reached.", fix: "These resume automatically, or use “Send to new” later." };
+  if (d.includes("131026") || d.includes("undeliverable") || d.includes("not registered") || d.includes("133010"))
+    return { reason: "This number isn't on WhatsApp (or can't receive messages).", fix: "Nothing to do — they don't use WhatsApp." };
+  if (d.includes("re-engagement") || d.includes("24 hour") || d.includes(" 470") || d.includes("131047"))
+    return { reason: "Outside WhatsApp's 24-hour reply window.", fix: "Send an approved template (already the default here)." };
+  if (d.includes("132001") || d.includes("does not exist"))
+    return { reason: "The template doesn't exist or isn't approved yet.", fix: "Check the template name and approval status in Meta." };
+  if (d.includes("aborted after"))
+    return { reason: "Sending stopped early after several errors in a row (usually a template/image problem).", fix: "Fix the template or add the image, then resend." };
+  if (d.includes("131000") || d.includes("temporar") || d.includes("internal"))
+    return { reason: "A temporary WhatsApp glitch.", fix: "Just retry — it usually works the second time." };
+  if (d.includes("payment") || d.includes("balance") || d.includes("#200"))
+    return { reason: "A billing/payment issue on the WhatsApp account.", fix: "Check the WhatsApp account's payment method in Meta." };
+  return { reason: detail ? `Couldn't be delivered (${detail.slice(0, 60)}).` : "Couldn't be delivered (reason not reported).", fix: "Retry; if it keeps failing, check the number and template." };
 }
 
 const AUDIENCE_OPTIONS: { value: Audience; label: string; description: string; active: string; inactive: string }[] = [
@@ -189,6 +218,18 @@ function computeWaStats(rawLogs: WaSendLog[]): WaCampaignStats {
     return Math.round(deltas.reduce((a, b) => a + b, 0) / deltas.length);
   };
 
+  // "Didn't receive it" = failed + skipped, grouped by plain-English reason.
+  const notReceivedLogs = logs.filter(l => l.status === "failed" || l.status === "skipped");
+  const nrMap = new Map<string, { fix: string; count: number }>();
+  for (const l of notReceivedLogs) {
+    const { reason, fix } = explainWaError(l.errorDetail || "");
+    const cur = nrMap.get(reason);
+    if (cur) cur.count++; else nrMap.set(reason, { fix, count: 1 });
+  }
+  const notReceived = [...nrMap.entries()]
+    .map(([reason, v]) => ({ reason, fix: v.fix, count: v.count }))
+    .sort((a, b) => b.count - a.count);
+
   return {
     total, sent, delivered, read, failed, skipped,
     deliveryRate: pct(delivered, sent),
@@ -196,6 +237,8 @@ function computeWaStats(rawLogs: WaSendLog[]): WaCampaignStats {
     failureRate:  pct(failed, total),
     failureReasons: group(logs.filter(l => l.status === "failed")),
     skippedReasons: group(logs.filter(l => l.status === "skipped")),
+    notReceived,
+    notReceivedTotal: notReceivedLogs.length,
     avgTimeToDeliveredMs: avg(logs, l => l.deliveredAt),
     avgTimeToReadMs:      avg(logs, l => l.readAt),
     hasDeliveryData: delivered > 0 || read > 0,
@@ -1437,30 +1480,20 @@ export default function WhatsAppTab() {
                                   </div>
                                 )}
 
-                                {/* Failure reasons */}
-                                {stats.failureReasons.length > 0 && (
+                                {/* Who didn't receive it — plain English + how to fix */}
+                                {stats.notReceivedTotal > 0 && (
                                   <div>
-                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Failure reasons</p>
-                                    <div className="space-y-1">
-                                      {stats.failureReasons.map(r => (
-                                        <div key={r.reason} className="flex items-center justify-between text-xs bg-white border border-slate-200 rounded-lg px-3 py-1.5">
-                                          <span className="text-red-700 truncate pr-2">{r.reason}</span>
-                                          <span className="tabular-nums font-semibold text-slate-600 shrink-0">{r.count}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-
-                                {/* Skipped reasons */}
-                                {stats.skippedReasons.length > 0 && (
-                                  <div>
-                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Skipped reasons</p>
-                                    <div className="space-y-1">
-                                      {stats.skippedReasons.map(r => (
-                                        <div key={r.reason} className="flex items-center justify-between text-xs bg-white border border-slate-200 rounded-lg px-3 py-1.5">
-                                          <span className="text-amber-700 truncate pr-2">{r.reason}</span>
-                                          <span className="tabular-nums font-semibold text-slate-600 shrink-0">{r.count}</span>
+                                    <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                                      Didn&apos;t receive it · <span className="text-red-600">{stats.notReceivedTotal}</span> of {stats.total}
+                                    </p>
+                                    <div className="space-y-1.5">
+                                      {stats.notReceived.map(r => (
+                                        <div key={r.reason} className="bg-white border border-slate-200 rounded-lg px-3 py-2">
+                                          <div className="flex items-start justify-between gap-3">
+                                            <span className="text-xs text-slate-700">{r.reason}</span>
+                                            <span className="tabular-nums font-bold text-red-600 shrink-0">{r.count}</span>
+                                          </div>
+                                          <p className="text-[11px] text-slate-400 mt-1">→ {r.fix}</p>
                                         </div>
                                       ))}
                                     </div>
