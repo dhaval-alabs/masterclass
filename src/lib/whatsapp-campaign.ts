@@ -156,14 +156,17 @@ export async function startCampaignSend(
 
   const drain = await drainWhatsAppCampaignQueue(campaign.id, { maxToSend: INLINE_CHUNK, headerImageUrl: opts.headerImageUrl });
 
+  // Report THIS action's numbers (how many we just targeted), not the campaign
+  // cumulative — otherwise "Send to new" of 6 people would read "Sent to 274".
+  const s = enqueued === 1 ? '' : 's';
   return {
     enqueued,
     sentNow: drain.sentNow,
     queuedRemaining: drain.queuedRemaining,
     status: drain.status,
     message: drain.queuedRemaining > 0
-      ? `Sending — ${drain.processedNow} done now, ${drain.queuedRemaining} queued (finishing automatically in the background).`
-      : `Sent to ${drain.sentTotal} recipient${drain.sentTotal !== 1 ? 's' : ''}${drain.failedTotal ? `, ${drain.failedTotal} failed` : ''}.`,
+      ? `Queued ${enqueued} recipient${s} — ${drain.sentNow} sent now, ${drain.queuedRemaining} finishing in the background.`
+      : `Sent to ${drain.sentNow} recipient${drain.sentNow !== 1 ? 's' : ''}${drain.failedNow ? `, ${drain.failedNow} failed` : ''}.`,
   };
 }
 

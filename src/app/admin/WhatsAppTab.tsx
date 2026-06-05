@@ -1480,6 +1480,16 @@ export default function WhatsAppTab() {
                                   </div>
                                 )}
 
+                                {/* Pending delivery — reached WhatsApp but no delivered receipt yet */}
+                                {stats.hasDeliveryData && (stats.sent - stats.delivered) > 0 && (
+                                  <div className="flex items-start gap-2 text-xs bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                                    <span className="font-bold text-blue-700 tabular-nums shrink-0">{stats.sent - stats.delivered}</span>
+                                    <span className="text-blue-700">
+                                      <span className="font-semibold">pending delivery</span> — sent to WhatsApp but not delivered yet (recipient&apos;s phone is likely off; it usually lands once they come online).
+                                    </span>
+                                  </div>
+                                )}
+
                                 {/* Who didn't receive it — plain English + how to fix */}
                                 {stats.notReceivedTotal > 0 && (
                                   <div>
