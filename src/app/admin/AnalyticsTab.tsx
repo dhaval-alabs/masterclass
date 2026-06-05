@@ -8,7 +8,20 @@ interface Overview {
   whatsapp: { campaigns: number; recipients: number; sent: number; delivered: number; read: number; failed: number; deliveryRate: number; readRate: number };
   optouts: number;
   whatsappDaily: { sent: number; limit: number };
+  funnel: {
+    registered: number; reminded: number; attended: number; attendedOfReminded: number;
+    remindedAttendRate: number; notRemindedAttendRate: number;
+    byLeadScore: { score: string; total: number; reminded: number; attended: number }[];
+  };
 }
+
+const SCORE_META: Record<string, { label: string; color: string }> = {
+  hot:      { label: "Hot",        color: "bg-red-500" },
+  warm:     { label: "Warm",       color: "bg-amber-500" },
+  cold:     { label: "Cold",       color: "bg-blue-400" },
+  junk:     { label: "Junk",       color: "bg-slate-400" },
+  unscored: { label: "Not scored", color: "bg-slate-300" },
+};
 
 const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
 
@@ -67,7 +80,7 @@ export default function AnalyticsTab() {
   }
   if (!data) return null;
 
-  const { email, whatsapp: wa, optouts, whatsappDaily } = data;
+  const { email, whatsapp: wa, optouts, whatsappDaily, funnel } = data;
 
   // Headline KPIs.
   const totalReached = email.sent + wa.sent;
@@ -136,6 +149,67 @@ export default function AnalyticsTab() {
               : "Send a campaign to see channel comparison."}
         </p>
       </div>
+
+      {/* Webinar funnel — Registered → Reminded → Attended */}
+      {funnel.registered > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <h3 className="text-sm font-bold text-[#003368] mb-3">Webinar funnel</h3>
+          {[
+            { label: "Registered", value: funnel.registered, color: "bg-[#003368]" },
+            { label: "Reminded (email or WhatsApp)", value: funnel.reminded, color: "bg-[#25D366]" },
+            { label: "Attended", value: funnel.attended, color: "bg-[#00875A]" },
+          ].map(b => {
+            const w = funnel.registered ? Math.round((b.value / funnel.registered) * 100) : 0;
+            return (
+              <div key={b.label} className="mb-2.5 last:mb-0">
+                <div className="flex justify-between text-xs mb-0.5">
+                  <span className="text-slate-600">{b.label}</span>
+                  <span className="tabular-nums font-semibold text-slate-700">{b.value.toLocaleString()} · {w}%</span>
+                </div>
+                <div className="h-3 rounded-full bg-slate-100 overflow-hidden">
+                  <div className={`h-full ${b.color} rounded-full transition-all`} style={{ width: `${Math.max(2, w)}%` }} />
+                </div>
+              </div>
+            );
+          })}
+          {funnel.attended > 0 ? (
+            <div className="mt-3 text-xs bg-[#00DF83]/10 border border-[#00DF83]/30 rounded-lg px-3 py-2 text-[#003368]">
+              <span className="font-bold">{funnel.remindedAttendRate}%</span> of reminded people attended
+              {funnel.notRemindedAttendRate > 0 && <> — vs <span className="font-bold">{funnel.notRemindedAttendRate}%</span> of those we couldn&apos;t reach. Reminders {funnel.remindedAttendRate >= funnel.notRemindedAttendRate ? "lifted" : "did not lift"} attendance.</>}
+            </div>
+          ) : (
+            <p className="mt-3 text-[11px] text-amber-600">Attendance shows after you run “Sync Attendance from Zoom” on the Registrations tab.</p>
+          )}
+        </div>
+      )}
+
+      {/* Engagement & attendance by lead quality */}
+      {funnel.byLeadScore.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <h3 className="text-sm font-bold text-[#003368] mb-1">By lead quality</h3>
+          <p className="text-[11px] text-slate-400 mb-3">How much of each lead tier we reached, and how many attended.</p>
+          <div className="space-y-2.5">
+            {funnel.byLeadScore.map(s => {
+              const meta = SCORE_META[s.score] ?? { label: s.score, color: "bg-slate-300" };
+              const remindedPct = s.total ? Math.round((s.reminded / s.total) * 100) : 0;
+              const attendPct = s.total ? Math.round((s.attended / s.total) * 100) : 0;
+              return (
+                <div key={s.score}>
+                  <div className="flex justify-between text-xs mb-0.5">
+                    <span className="flex items-center gap-1.5"><span className={`w-2.5 h-2.5 rounded-sm ${meta.color} inline-block`} />{meta.label} <span className="text-slate-400">({s.total})</span></span>
+                    <span className="tabular-nums text-slate-500">{remindedPct}% reached · <span className="font-semibold text-[#00875A]">{attendPct}% attended</span></span>
+                  </div>
+                  <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden relative">
+                    <div className={`h-full ${meta.color} rounded-full opacity-40`} style={{ width: `${Math.max(2, remindedPct)}%` }} />
+                    <div className="h-full bg-[#00875A] rounded-full absolute top-0 left-0" style={{ width: `${Math.max(0, attendPct)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-slate-400 mt-2">Light bar = reached · solid green = attended.</p>
+        </div>
+      )}
 
       {/* WhatsApp daily capacity */}
       <div className="bg-white rounded-xl border border-slate-200 p-4">

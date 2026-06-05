@@ -2899,6 +2899,15 @@ export interface AnalyticsOverview {
   whatsapp: { campaigns: number; recipients: number; sent: number; delivered: number; read: number; failed: number; deliveryRate: number; readRate: number };
   optouts: number;
   whatsappDaily: { sent: number; limit: number };
+  funnel: {
+    registered: number;
+    reminded: number;
+    attended: number;
+    attendedOfReminded: number;
+    remindedAttendRate: number;      // attended & reminded / reminded
+    notRemindedAttendRate: number;   // attended & not-reminded / not-reminded
+    byLeadScore: { score: string; total: number; reminded: number; attended: number }[];
+  };
 }
 
 export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
@@ -2944,6 +2953,50 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
     else if (s === 'delivered') { waDelivered++; }
   }
 
+  // ── Webinar funnel: Registered → Reminded → Attended (+ by lead score) ──
+  const last10 = (p: string) => (p || '').replace(/\D/g, '').slice(-10);
+  // Phones reached on WhatsApp (any successful send).
+  const waReached = new Set<string>();
+  for (const r of waLog ?? []) {
+    if (['sent', 'delivered', 'read'].includes(r.status as string)) waReached.add(last10(r.phone as string));
+  }
+  // Emails reached (recorded recipients).
+  const { data: emailRecips } = await supabase
+    .schema('excel_to_ai')
+    .from('email_campaign_recipients')
+    .select('email');
+  const emailReached = new Set((emailRecips ?? []).map(r => (r.email as string || '').toLowerCase().trim()));
+  // Registrants, deduped by email.
+  const { data: regs } = await supabase.from('registrations').select('email, phone, lead_score, attended').limit(20000);
+  const regMap = new Map<string, { phone: string; leadScore: string | null; attended: boolean }>();
+  for (const r of regs ?? []) {
+    const email = (r.email as string || '').toLowerCase().trim();
+    if (!email) continue;
+    const attended = r.attended === true;
+    const leadScore = (r.lead_score as string | null) ?? null;
+    const cur = regMap.get(email);
+    if (!cur) regMap.set(email, { phone: r.phone as string, leadScore, attended });
+    else { if (attended) cur.attended = true; if (!cur.leadScore && leadScore) cur.leadScore = leadScore; }
+  }
+  let reminded = 0, attended = 0, attendedReminded = 0;
+  const scoreMap = new Map<string, { total: number; reminded: number; attended: number }>();
+  for (const [email, p] of regMap) {
+    const isReminded = emailReached.has(email) || (!!p.phone && waReached.has(last10(p.phone)));
+    if (isReminded) reminded++;
+    if (p.attended) attended++;
+    if (isReminded && p.attended) attendedReminded++;
+    const key = p.leadScore || 'unscored';
+    const sm = scoreMap.get(key) ?? { total: 0, reminded: 0, attended: 0 };
+    sm.total++; if (isReminded) sm.reminded++; if (p.attended) sm.attended++;
+    scoreMap.set(key, sm);
+  }
+  const registered = regMap.size;
+  const notReminded = Math.max(0, registered - reminded);
+  const attendedNotReminded = Math.max(0, attended - attendedReminded);
+  const byLeadScore = ['hot', 'warm', 'cold', 'junk', 'unscored']
+    .map(s => ({ score: s, ...(scoreMap.get(s) ?? { total: 0, reminded: 0, attended: 0 }) }))
+    .filter(x => x.total > 0);
+
   const { count: optouts } = await supabase
     .schema('excel_to_ai')
     .from('whatsapp_optouts')
@@ -2971,6 +3024,15 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
     },
     optouts: optouts ?? 0,
     whatsappDaily: { sent: dailySent, limit },
+    funnel: {
+      registered,
+      reminded,
+      attended,
+      attendedOfReminded: attendedReminded,
+      remindedAttendRate: pctI(attendedReminded, reminded),
+      notRemindedAttendRate: pctI(attendedNotReminded, notReminded),
+      byLeadScore,
+    },
   };
 }
 
