@@ -461,6 +461,20 @@ function CampaignStatsPanel({ campaign }: { campaign: Campaign }) {
 
   const isDraft = campaign.status === "draft";
 
+  // Parity analytics (mirrors the WhatsApp Stats tab).
+  const uniqueOpens = stats?.uniqueOpens ?? campaign.uniqueOpenCount;
+  const clicks      = stats?.clickCount  ?? campaign.clickCount;
+  const openRatePct  = stats?.openRate  ?? pct(uniqueOpens, base);
+  const clickRatePct = stats?.clickRate ?? pct(clicks, base);
+  const ctoPct       = uniqueOpens > 0 ? Math.round((clicks / uniqueOpens) * 100) : 0;
+  const didntOpen    = Math.max(0, deliveredCount - uniqueOpens);
+  const funnelRows = [
+    { label: "Recipients", value: campaign.totalRecipients, color: "bg-[#003368]" },
+    { label: "Delivered",  value: deliveredCount,           color: "bg-blue-400" },
+    { label: "Opened",     value: uniqueOpens,              color: "bg-[#00DF83]" },
+    { label: "Clicked",    value: clicks,                   color: "bg-indigo-400" },
+  ];
+
   return (
     <div className="px-5 pb-5 pt-3 bg-slate-50 border-t border-slate-200 space-y-5">
 
@@ -511,6 +525,45 @@ function CampaignStatsPanel({ campaign }: { campaign: Campaign }) {
           </div>
         ))}
       </div>
+
+      {/* Funnel — Recipients → Delivered → Opened → Clicked */}
+      {!isDraft && campaign.totalRecipients > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">Funnel</p>
+          {funnelRows.map(b => {
+            const w = campaign.totalRecipients ? Math.round((b.value / campaign.totalRecipients) * 100) : 0;
+            return (
+              <div key={b.label} className="mb-2 last:mb-0">
+                <div className="flex justify-between text-[11px] mb-0.5">
+                  <span className="text-slate-500">{b.label}</span>
+                  <span className="tabular-nums font-semibold text-slate-700">{b.value.toLocaleString()} · {w}%</span>
+                </div>
+                <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
+                  <div className={`h-full ${b.color} rounded-full transition-all`} style={{ width: `${Math.max(2, w)}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Engagement insights */}
+      {!isDraft && deliveredCount > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {[
+            { label: "Open rate", value: `${openRatePct}%`, hint: "of delivered" },
+            { label: "Click rate", value: `${clickRatePct}%`, hint: "of delivered" },
+            { label: "Click-to-open", value: `${ctoPct}%`, hint: "of openers clicked" },
+            { label: "Didn't open", value: didntOpen.toLocaleString(), hint: "delivered, unopened" },
+          ].map(c => (
+            <div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2">
+              <p className="text-[10px] text-slate-400 leading-tight">{c.label}</p>
+              <p className="font-bold text-slate-700 tabular-nums text-sm">{c.value}</p>
+              <p className="text-[9px] text-slate-400">{c.hint}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Opens by hour timeline */}
       {stats && stats.opensByHour.length > 0 && (
