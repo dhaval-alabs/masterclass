@@ -1265,6 +1265,14 @@ export default function WhatsAppTab() {
                       )}
                     </div>
                     <StatusBadge status={c.status} />
+                    {c.status === "draft" && (
+                      <button onClick={() => handleSendNow(c.id)} disabled={schedulingId === c.id}
+                        className="flex items-center gap-1 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#1da851] border border-[#1da851] px-2.5 py-1 rounded-md transition-colors shrink-0 disabled:opacity-60"
+                        title="Send this draft now (recomputes the audience, then sends via the background queue)">
+                        {schedulingId === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                        Send
+                      </button>
+                    )}
                     {c.status === "scheduled" && (
                       <>
                         <button onClick={() => handleSendNow(c.id)} disabled={schedulingId === c.id}
