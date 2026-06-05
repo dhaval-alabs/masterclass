@@ -239,29 +239,37 @@ export async function sendWhatsAppCampaign(params: {
     }
   }
 
-  // 3. Daily limit guard.
-  const dailyLimit = parseInt(process.env.WA_DAILY_LIMIT ?? '500', 10);
+  // 3. Daily-limit guard — stays safely within the number's WhatsApp messaging
+  //    tier (default 900, a ~10% margin under the 1,000/24h Tier-1 cap). We cap
+  //    THIS send to the remaining headroom so we never overshoot the tier; the
+  //    overflow is recorded as 'skipped' (not failed) and is reachable the next
+  //    day via "Send to new" once the daily count resets.
+  const dailyLimit = parseInt(process.env.WA_DAILY_LIMIT ?? '900', 10);
   const dailySentSoFar = await getWhatsAppDailySentCount();
-  if (dailySentSoFar >= dailyLimit) {
-    const limitError = `Daily send limit reached (${dailySentSoFar}/${dailyLimit})`;
+  const headroom = Math.max(0, dailyLimit - dailySentSoFar);
+
+  // Already at/over the cap → nothing can go out now. Defer everyone.
+  if (headroom <= 0) {
+    const limitError = `Daily send limit reached (${dailySentSoFar}/${dailyLimit}) — deferred; use "Send to new" after the daily count resets.`;
     errors.push(limitError);
-    // Mark all active recipients as failed (they won't be sent).
     for (const r of activeRecipients) {
-      logEntries.push({
-        campaignId,
-        phone: r.phone,
-        recipientName: r.fullName,
-        status: 'failed',
-        errorDetail: limitError,
-      });
+      logEntries.push({ campaignId, phone: r.phone, recipientName: r.fullName, status: 'skipped', errorDetail: limitError });
     }
     await bulkCreateWhatsAppSendLog(logEntries);
-    return {
-      sentCount: 0,
-      failedCount: activeRecipients.length,
-      skippedCount,
-      errors,
-    };
+    return { sentCount: 0, failedCount: 0, skippedCount: skippedCount + activeRecipients.length, errors };
+  }
+
+  // Under the cap but too many recipients → send up to the headroom, defer the rest.
+  let recipientsToSend = activeRecipients;
+  if (activeRecipients.length > headroom) {
+    recipientsToSend = activeRecipients.slice(0, headroom);
+    const deferred = activeRecipients.slice(headroom);
+    const deferMsg = `Daily limit ${dailyLimit} (${dailySentSoFar} already sent today): sending ${headroom} now, ${deferred.length} deferred — reach them with "Send to new" after the daily count resets.`;
+    errors.push(deferMsg);
+    for (const r of deferred) {
+      logEntries.push({ campaignId, phone: r.phone, recipientName: r.fullName, status: 'skipped', errorDetail: `Daily limit (${dailyLimit}) — deferred, reachable via "Send to new" tomorrow` });
+      skippedCount++;
+    }
   }
 
   // 4. Send loop.
@@ -269,8 +277,8 @@ export async function sendWhatsAppCampaign(params: {
   let failedCount        = 0;
   let consecutiveFails   = 0;
 
-  for (let i = 0; i < activeRecipients.length; i++) {
-    const r = activeRecipients[i];
+  for (let i = 0; i < recipientsToSend.length; i++) {
+    const r = recipientsToSend[i];
     const firstName    = r.fullName.split(' ')[0] || r.fullName;
     const resolvedVars = variables.map(v => v.replace(/\{name\}/gi, firstName));
     const components: unknown[] = [];
@@ -322,8 +330,8 @@ export async function sendWhatsAppCampaign(params: {
         const abortMsg = `Aborted after ${MAX_CONSECUTIVE_FAILURES} consecutive failures — check template status and token.`;
         errors.push(abortMsg);
         // Count remaining as failed.
-        for (let j = i + 1; j < activeRecipients.length; j++) {
-          const rem = activeRecipients[j];
+        for (let j = i + 1; j < recipientsToSend.length; j++) {
+          const rem = recipientsToSend[j];
           failedCount++;
           logEntries.push({
             campaignId,
@@ -342,7 +350,7 @@ export async function sendWhatsAppCampaign(params: {
 
     // Batch pause every BATCH_SIZE messages (not after the last one).
     const isEndOfBatch = (i + 1) % BATCH_SIZE === 0;
-    const isLastMsg    = i === activeRecipients.length - 1;
+    const isLastMsg    = i === recipientsToSend.length - 1;
     if (isEndOfBatch && !isLastMsg) {
       console.log(`[WhatsApp] Batch pause after ${i + 1} messages — resuming in ${BATCH_PAUSE_MS / 1000} s`);
       await sleep(BATCH_PAUSE_MS);

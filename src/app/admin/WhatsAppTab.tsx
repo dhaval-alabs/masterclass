@@ -122,7 +122,7 @@ const LANGUAGE_OPTIONS = [
   { value: "hi",    label: "Hindi" },
 ];
 
-const DAILY_LIMIT = Number(process.env.NEXT_PUBLIC_WA_DAILY_LIMIT ?? 500);
+const DAILY_LIMIT = Number(process.env.NEXT_PUBLIC_WA_DAILY_LIMIT ?? 900);
 
 function pct(n: number, d: number) {
   if (!d) return 0;
