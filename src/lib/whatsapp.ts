@@ -204,6 +204,19 @@ export async function sendWhatsAppCampaign(params: {
   const errors: string[] = [];
   let skippedCount = 0;
 
+  // Persist the log buffer incrementally so a function timeout mid-send never
+  // loses records — messages already went out to real users, so we MUST capture
+  // them even if the request is killed before the loop finishes.
+  const flushLog = async () => {
+    if (logEntries.length === 0) return;
+    const batch = logEntries.splice(0, logEntries.length);
+    try {
+      await bulkCreateWhatsAppSendLog(batch);
+    } catch (logErr) {
+      console.error('[WhatsApp] Failed to persist send-log batch:', logErr);
+    }
+  };
+
   for (const r of recipients) {
     if (!isValidIndianPhone(r.phone)) {
       skippedCount++;
@@ -348,22 +361,21 @@ export async function sendWhatsAppCampaign(params: {
     // Inter-message delay — 100 ms → 10 msg/s.
     await sleep(MSG_DELAY_MS);
 
-    // Batch pause every BATCH_SIZE messages (not after the last one).
+    // Batch boundary every BATCH_SIZE messages: persist what we have so far
+    // (survives a timeout), then pause (unless it's the last message).
     const isEndOfBatch = (i + 1) % BATCH_SIZE === 0;
     const isLastMsg    = i === recipientsToSend.length - 1;
-    if (isEndOfBatch && !isLastMsg) {
-      console.log(`[WhatsApp] Batch pause after ${i + 1} messages — resuming in ${BATCH_PAUSE_MS / 1000} s`);
-      await sleep(BATCH_PAUSE_MS);
+    if (isEndOfBatch) {
+      await flushLog();
+      if (!isLastMsg) {
+        console.log(`[WhatsApp] Batch pause after ${i + 1} messages — resuming in ${BATCH_PAUSE_MS / 1000} s`);
+        await sleep(BATCH_PAUSE_MS);
+      }
     }
   }
 
-  // 5. Persist send log.
-  try {
-    await bulkCreateWhatsAppSendLog(logEntries);
-  } catch (logErr) {
-    // Non-critical — log but don't fail the campaign result.
-    console.error('[WhatsApp] Failed to persist send log:', logErr);
-  }
+  // 5. Persist any remaining log entries.
+  await flushLog();
 
   return { sentCount, failedCount, skippedCount, errors };
 }

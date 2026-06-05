@@ -1,3 +1,4 @@
+export const maxDuration = 300; // fires scheduled campaigns (per-recipient loops)
 import { NextRequest, NextResponse } from 'next/server';
 import { getDueScheduledWhatsAppCampaigns } from '@/lib/db';
 import { fireWhatsAppCampaign } from '@/lib/whatsapp-campaign';

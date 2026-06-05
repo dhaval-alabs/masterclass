@@ -1,3 +1,4 @@
+export const maxDuration = 300; // send-now runs the per-recipient loop
 import { NextRequest, NextResponse } from 'next/server';
 import { getWhatsAppCampaignById, updateWhatsAppCampaign } from '@/lib/db';
 import { fireWhatsAppCampaign } from '@/lib/whatsapp-campaign';

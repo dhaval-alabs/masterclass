@@ -1,4 +1,6 @@
 export const dynamic = 'force-dynamic';
+// Sends run a per-recipient loop; give the function room (Vercel Pro allows up to 300s).
+export const maxDuration = 300;
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getEmailRecipients, getActiveWebinarSession,

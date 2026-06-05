@@ -1,3 +1,4 @@
+export const maxDuration = 300; // per-recipient send loop can run minutes
 import { NextRequest, NextResponse } from 'next/server';
 import { getWhatsAppCampaignById, getUnsentWhatsAppRegistrations, updateWhatsAppCampaign, getActiveWebinarSession } from '@/lib/db';
 import { sendWhatsAppCampaign } from '@/lib/whatsapp';

@@ -124,6 +124,24 @@ const LANGUAGE_OPTIONS = [
 
 const DAILY_LIMIT = Number(process.env.NEXT_PUBLIC_WA_DAILY_LIMIT ?? 900);
 
+// Reads a response as JSON, but degrades gracefully when the server returns a
+// non-JSON body (e.g. a Vercel "An error occurred…" timeout page) instead of
+// throwing the cryptic "Unexpected token 'A'… is not valid JSON".
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors res.json()'s any so callers keep working
+async function readJson(res: Response): Promise<any> {
+  const text = await res.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    const isTimeout = res.status === 504 || /timed out|timeout|invocation|an error occurred/i.test(text);
+    throw new Error(
+      isTimeout
+        ? "The send took too long and the server timed out. Messages already sent ARE recorded — click Refresh, then \"Fix counts\", and use \"Send to new\" to reach anyone left."
+        : (text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160) || `Request failed (HTTP ${res.status})`),
+    );
+  }
+}
+
 function pct(n: number, d: number) {
   if (!d) return 0;
   return Math.round((n / d) * 1000) / 10;
@@ -388,7 +406,7 @@ export default function WhatsAppTab() {
     setPreview(null);
     try {
       const res = await fetch(`/api/admin/email/preview?audience=${aud}`);
-      if (res.ok) setPreview(await res.json());
+      if (res.ok) setPreview(await readJson(res));
     } finally { setIsLoadingPreview(false); }
   }, []);
 
@@ -396,7 +414,7 @@ export default function WhatsAppTab() {
     setIsLoadingCampaigns(true);
     try {
       const res = await fetch("/api/admin/whatsapp/campaigns");
-      const data = await res.json();
+      const data = await readJson(res);
       if (res.ok) setCampaigns(data.campaigns ?? []);
     } finally { setIsLoadingCampaigns(false); }
   }, []);
@@ -407,7 +425,7 @@ export default function WhatsAppTab() {
     setShowTemplatePicker(true);
     try {
       const res = await fetch("/api/admin/whatsapp/templates");
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setTemplates(data.templates ?? []);
     } catch (err) {
@@ -420,7 +438,7 @@ export default function WhatsAppTab() {
     try {
       const res = await fetch(`/api/admin/whatsapp/simulate?audience=${audience}`);
       if (res.ok) {
-        setSimulationData(await res.json());
+        setSimulationData(await readJson(res));
         setShowSimulation(true);
       }
     } finally { setIsLoadingSimulation(false); }
@@ -431,7 +449,7 @@ export default function WhatsAppTab() {
     try {
       const res = await fetch("/api/admin/whatsapp/optouts");
       if (res.ok) {
-        const data = await res.json();
+        const data = await readJson(res);
         setOptouts(data.optouts ?? []);
       }
     } finally { setIsLoadingOptouts(false); }
@@ -444,7 +462,7 @@ export default function WhatsAppTab() {
     try {
       const res = await fetch(`/api/admin/whatsapp/campaigns/${campaignId}/logs`);
       if (res.ok) {
-        const data = await res.json();
+        const data = await readJson(res);
         setCampaignLogs(prev => ({ ...prev, [campaignId]: data.logs ?? [] }));
         setLastLogsRefresh(new Date());
       }
@@ -455,7 +473,7 @@ export default function WhatsAppTab() {
     try {
       const res = await fetch("/api/admin/whatsapp/simulate?audience=all");
       if (res.ok) {
-        const data = await res.json();
+        const data = await readJson(res);
         setDailyCount(data.dailySentCount ?? null);
       }
     } catch { /* ignore */ }
@@ -520,7 +538,7 @@ export default function WhatsAppTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ templateName, languageCode, audience, variables, headerImageUrl, scheduledFor: scheduledForIso }),
       });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       const kind = !data.configured ? "warn" : data.success ? "ok" : "err";
       const errorDetail = data.errors?.length ? ` — ${data.errors[0]}` : "";
@@ -542,7 +560,7 @@ export default function WhatsAppTab() {
     setSendNewResults(prev => { const n = { ...prev }; delete n[campaignId]; return n; });
     try {
       const res = await fetch(`/api/admin/whatsapp/campaigns/${campaignId}/schedule`, { method: "DELETE" });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: "ok", text: data.message } }));
       loadCampaigns();
@@ -557,7 +575,7 @@ export default function WhatsAppTab() {
     setSendNewResults(prev => { const n = { ...prev }; delete n[campaignId]; return n; });
     try {
       const res = await fetch(`/api/admin/whatsapp/campaigns/${campaignId}/schedule`, { method: "POST" });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: data.success ? "ok" : "err", text: data.message } }));
       loadCampaigns();
@@ -585,7 +603,7 @@ export default function WhatsAppTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ toPhone: testPhone.trim(), templateName, languageCode, variables, headerImageUrl }),
       });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setTestResult({ kind: "ok", text: data.message });
     } catch (err) {
@@ -600,7 +618,7 @@ export default function WhatsAppTab() {
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`);
       setHeaderImageUrl(data.url);
     } catch (err) {
@@ -616,7 +634,7 @@ export default function WhatsAppTab() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ headerImageUrl: headerImageUrl.trim() || undefined }),
       });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       const errorDetail = data.errors?.length ? ` — ${data.errors[0]}` : "";
       setRetryResults(prev => ({ ...prev, [campaignId]: { kind: data.success ? "ok" : "err", text: data.message + errorDetail } }));
@@ -635,7 +653,7 @@ export default function WhatsAppTab() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ headerImageUrl: headerImageUrl.trim() || undefined }),
       });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       const errorDetail = data.errors?.length ? ` — ${data.errors[0]}` : "";
       setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: "ok", text: data.message + errorDetail } }));
@@ -654,7 +672,7 @@ export default function WhatsAppTab() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ headerImageUrl: headerImageUrl.trim() || undefined }),
       });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       const errorDetail = data.errors?.length ? ` — ${data.errors[0]}` : "";
       setSendNewResults(prev => ({ ...prev, [campaignId]: { kind: "ok", text: data.message + errorDetail } }));
@@ -672,7 +690,7 @@ export default function WhatsAppTab() {
     setReconcileMsg(null);
     try {
       const res = await fetch("/api/admin/whatsapp/campaigns/reconcile", { method: "POST" });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setReconcileMsg({ kind: "ok", text: data.message });
       loadCampaigns();
