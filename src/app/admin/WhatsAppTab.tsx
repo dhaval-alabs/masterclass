@@ -1277,22 +1277,27 @@ export default function WhatsAppTab() {
           </div>
         </div>
 
-        {/* Account-level KPI strip (all-time, from the loaded campaign list) */}
+        {/* Account-level KPI strip — cumulative across campaigns (message volume, not unique people) */}
         {campaigns.length > 0 && (
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
-            {[
-              { label: "Campaigns",  value: campaigns.length },
-              { label: "Recipients", value: campaigns.reduce((s, c) => s + c.totalRecipients, 0) },
-              { label: "Sent",       value: campaigns.reduce((s, c) => s + c.sentCount, 0) },
-              { label: "Failed",     value: campaigns.reduce((s, c) => s + c.failedCount, 0) },
-              { label: "Opted out",  value: optouts.length },
-            ].map(m => (
-              <div key={m.label} className="bg-white rounded-lg border border-slate-200 px-3 py-2.5 text-center">
-                <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{m.label}</p>
-                <p className="text-lg font-extrabold tabular-nums text-[#003368]">{m.value.toLocaleString()}</p>
-              </div>
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-1.5">
+              {[
+                { label: "Campaigns",   value: campaigns.length, hint: "Number of WhatsApp campaigns." },
+                { label: "Messages",    value: campaigns.reduce((s, c) => s + c.totalRecipients, 0), hint: "Total recipient-messages across all campaigns. Someone messaged in 2 campaigns counts twice — this is volume, not unique people." },
+                { label: "Sent",        value: campaigns.reduce((s, c) => s + c.sentCount, 0), hint: "Total messages successfully sent across all campaigns." },
+                { label: "Failed",      value: campaigns.reduce((s, c) => s + c.failedCount, 0), hint: "Total failed across all campaigns." },
+                { label: "Opted out",   value: optouts.length, hint: "Unique phones that opted out." },
+              ].map(m => (
+                <div key={m.label} title={m.hint} className="bg-white rounded-lg border border-slate-200 px-3 py-2.5 text-center cursor-help">
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{m.label}</p>
+                  <p className="text-lg font-extrabold tabular-nums text-[#003368]">{m.value.toLocaleString()}</p>
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-slate-400 mb-3">
+              Totals across all campaigns — a person messaged in multiple campaigns is counted each time (message volume, not unique people). For unique people reached &amp; the webinar funnel, see the <span className="font-semibold text-slate-500">Analytics</span> tab.
+            </p>
+          </>
         )}
 
         {isLoadingCampaigns ? (
