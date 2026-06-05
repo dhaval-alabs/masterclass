@@ -92,6 +92,11 @@ interface WaCampaignStats {
   avgTimeToDeliveredMs: number | null;
   avgTimeToReadMs: number | null;
   hasDeliveryData: boolean;
+  // Delivered/read activity bucketed over time (for the graph).
+  timeline: { t: number; delivered: number; read: number }[];
+  // Engagement extras.
+  pendingDelivery: number;   // sent but no delivered receipt yet
+  notReadYet: number;        // delivered but not read yet
 }
 
 // Translates a raw WhatsApp/Meta send error into a plain-English reason + what to do.
@@ -230,6 +235,26 @@ function computeWaStats(rawLogs: WaSendLog[]): WaCampaignStats {
     .map(([reason, v]) => ({ reason, fix: v.fix, count: v.count }))
     .sort((a, b) => b.count - a.count);
 
+  // Delivered/read activity over time — bucket the receipt timestamps.
+  const tEvents: { ts: number; kind: "d" | "r" }[] = [];
+  for (const l of logs) {
+    if (l.deliveredAt) tEvents.push({ ts: new Date(l.deliveredAt).getTime(), kind: "d" });
+    if (l.readAt)      tEvents.push({ ts: new Date(l.readAt).getTime(),      kind: "r" });
+  }
+  let timeline: { t: number; delivered: number; read: number }[] = [];
+  if (tEvents.length >= 2) {
+    const tsList = tEvents.map(e => e.ts);
+    const min = Math.min(...tsList), max = Math.max(...tsList);
+    const BUCKETS = 16;
+    const size = Math.max(1, (max - min) / BUCKETS);
+    const arr = Array.from({ length: BUCKETS }, (_, i) => ({ t: min + i * size, delivered: 0, read: 0 }));
+    for (const e of tEvents) {
+      const idx = Math.min(BUCKETS - 1, Math.floor((e.ts - min) / size));
+      if (e.kind === "d") arr[idx].delivered++; else arr[idx].read++;
+    }
+    timeline = arr;
+  }
+
   return {
     total, sent, delivered, read, failed, skipped,
     deliveryRate: pct(delivered, sent),
@@ -242,6 +267,9 @@ function computeWaStats(rawLogs: WaSendLog[]): WaCampaignStats {
     avgTimeToDeliveredMs: avg(logs, l => l.deliveredAt),
     avgTimeToReadMs:      avg(logs, l => l.readAt),
     hasDeliveryData: delivered > 0 || read > 0,
+    timeline,
+    pendingDelivery: Math.max(0, sent - delivered),
+    notReadYet: Math.max(0, delivered - read),
   };
 }
 
@@ -1477,6 +1505,87 @@ export default function WhatsAppTab() {
                                   <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-600">
                                     <span><span className="font-semibold">Avg. to delivered:</span> {formatDuration(stats.avgTimeToDeliveredMs)}</span>
                                     <span><span className="font-semibold">Avg. to read:</span> {formatDuration(stats.avgTimeToReadMs)}</span>
+                                  </div>
+                                )}
+
+                                {/* Funnel — visual drop-off Recipients → Sent → Delivered → Read */}
+                                {stats.total > 0 && (
+                                  <div className="bg-white rounded-xl border border-slate-200 p-4">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">Funnel</p>
+                                    {[
+                                      { label: "Recipients", value: stats.total,     color: "bg-[#003368]", show: true },
+                                      { label: "Sent",        value: stats.sent,      color: "bg-blue-400",  show: true },
+                                      { label: "Delivered",   value: stats.delivered, color: "bg-[#00DF83]", show: stats.hasDeliveryData },
+                                      { label: "Read",        value: stats.read,      color: "bg-[#00875A]", show: stats.hasDeliveryData },
+                                    ].filter(b => b.show).map(b => {
+                                      const w = stats.total ? Math.round((b.value / stats.total) * 100) : 0;
+                                      return (
+                                        <div key={b.label} className="mb-2 last:mb-0">
+                                          <div className="flex justify-between text-[11px] mb-0.5">
+                                            <span className="text-slate-500">{b.label}</span>
+                                            <span className="tabular-nums font-semibold text-slate-700">{b.value.toLocaleString()} · {w}%</span>
+                                          </div>
+                                          <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
+                                            <div className={`h-full ${b.color} rounded-full transition-all`} style={{ width: `${Math.max(2, w)}%` }} />
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                    {!stats.hasDeliveryData && (
+                                      <p className="text-[10px] text-amber-600 mt-2">Delivered/Read appear here once webhook tracking records receipts.</p>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Delivery & read over time */}
+                                {stats.timeline.length > 0 && (
+                                  <div className="bg-white rounded-xl border border-slate-200 p-4">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">Delivery &amp; read over time</p>
+                                    <div className="flex items-end gap-1" style={{ height: 80 }}>
+                                      {(() => {
+                                        const max = Math.max(...stats.timeline.map(b => b.delivered + b.read), 1);
+                                        return stats.timeline.map((b, i) => {
+                                          const tot = b.delivered + b.read;
+                                          const h = Math.max(2, (tot / max) * 80);
+                                          const readPct = tot ? (b.read / tot) * 100 : 0;
+                                          return (
+                                            <div key={i} className="flex-1 min-w-[4px] flex flex-col justify-end" style={{ height: 80 }}
+                                              title={`${new Date(b.t).toLocaleString()} — ${b.delivered} delivered, ${b.read} read`}>
+                                              <div className="w-full rounded-t overflow-hidden flex flex-col" style={{ height: h }}>
+                                                <div className="w-full bg-[#00875A]" style={{ height: `${readPct}%` }} />
+                                                <div className="w-full bg-[#00DF83] flex-1" />
+                                              </div>
+                                            </div>
+                                          );
+                                        });
+                                      })()}
+                                    </div>
+                                    <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+                                      <span>{new Date(stats.timeline[0].t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                                      <span>{new Date(stats.timeline[stats.timeline.length - 1].t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                                    </div>
+                                    <div className="flex gap-3 text-[10px] text-slate-500 mt-2">
+                                      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-[#00DF83] inline-block" /> Delivered</span>
+                                      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-[#00875A] inline-block" /> Read</span>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Engagement insights */}
+                                {stats.hasDeliveryData && (
+                                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                    {[
+                                      { label: "Delivery rate", value: `${stats.deliveryRate}%`, hint: "of sent" },
+                                      { label: "Read rate", value: `${stats.readRate}%`, hint: "of delivered" },
+                                      { label: "Pending delivery", value: stats.pendingDelivery.toLocaleString(), hint: "no receipt yet" },
+                                      { label: "Delivered, not read", value: stats.notReadYet.toLocaleString(), hint: "unopened" },
+                                    ].map(c => (
+                                      <div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2">
+                                        <p className="text-[10px] text-slate-400 leading-tight">{c.label}</p>
+                                        <p className="font-bold text-slate-700 tabular-nums text-sm">{c.value}</p>
+                                        <p className="text-[9px] text-slate-400">{c.hint}</p>
+                                      </div>
+                                    ))}
                                   </div>
                                 )}
 
