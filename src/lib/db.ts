@@ -2870,6 +2870,111 @@ export async function reconcileWhatsAppCampaignCounters(
   return { total, sent, failed, skipped, status };
 }
 
+// Deduped sent/failed counts from the send log (one row per phone, best status).
+// Used while draining the queue to keep counters accurate WITHOUT touching
+// totalRecipients (which stays fixed at the enqueued audience size).
+export async function getWhatsAppCampaignLogCounts(
+  campaignId: string,
+): Promise<{ sent: number; failed: number; skipped: number }> {
+  const logs = await getWhatsAppCampaignLogs(campaignId);
+  const rank: Record<string, number> = { read: 4, delivered: 3, sent: 2, failed: 1, skipped: 0 };
+  const best = new Map<string, string>();
+  for (const l of logs) {
+    const key = (l.phone || '').replace(/\D/g, '').slice(-10) || l.id;
+    const cur = best.get(key);
+    if (cur === undefined || (rank[l.status] ?? -1) > (rank[cur] ?? -1)) best.set(key, l.status);
+  }
+  const s = [...best.values()];
+  return {
+    sent:    s.filter(x => x === 'sent' || x === 'delivered' || x === 'read').length,
+    failed:  s.filter(x => x === 'failed').length,
+    skipped: s.filter(x => x === 'skipped').length,
+  };
+}
+
+// ── WhatsApp send queue (background batched delivery) ─────────────────────────
+
+/**
+ * Enqueues recipients for a campaign as 'pending'. Re-enqueuing an existing
+ * phone RESETS it to pending (so retry / retry-failed re-send people who were
+ * already processed). Deduped by (campaign_id, phone).
+ */
+export async function enqueueWhatsAppRecipients(
+  campaignId: string,
+  recipients: { phone: string; fullName: string }[],
+): Promise<number> {
+  if (recipients.length === 0) return 0;
+  // Dedupe by last-10 digits within this batch.
+  const seen = new Set<string>();
+  const rows: { campaign_id: string; phone: string; recipient_name: string; status: string; error: null; processed_at: null }[] = [];
+  for (const r of recipients) {
+    const key = (r.phone || '').replace(/\D/g, '').slice(-10);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    rows.push({ campaign_id: campaignId, phone: r.phone, recipient_name: r.fullName, status: 'pending', error: null, processed_at: null });
+  }
+  if (rows.length === 0) return 0;
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_queue')
+    .upsert(rows, { onConflict: 'campaign_id,phone' }); // updates existing → resets to pending
+  if (error) throw error;
+  return rows.length;
+}
+
+/** Count of pending (still-to-send) rows for a campaign. */
+export async function countPendingWhatsAppQueue(campaignId: string): Promise<number> {
+  const { count, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_queue')
+    .select('*', { count: 'exact', head: true })
+    .eq('campaign_id', campaignId)
+    .eq('status', 'pending');
+  if (error) throw error;
+  return count ?? 0;
+}
+
+/** Fetch up to `limit` pending queue rows for a campaign (oldest first). */
+export async function claimPendingWhatsAppQueue(
+  campaignId: string,
+  limit: number,
+): Promise<{ id: string; phone: string; fullName: string }[]> {
+  if (limit <= 0) return [];
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_queue')
+    .select('id, phone, recipient_name')
+    .eq('campaign_id', campaignId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []).map(r => ({ id: r.id as string, phone: r.phone as string, fullName: (r.recipient_name as string) ?? '' }));
+}
+
+/** Mark queue rows processed (status defaults to 'sent' = attempted/done). */
+export async function markWhatsAppQueueProcessed(ids: string[], status: 'sent' | 'failed' | 'skipped' = 'sent'): Promise<void> {
+  if (ids.length === 0) return;
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_queue')
+    .update({ status, processed_at: new Date().toISOString() })
+    .in('id', ids);
+  if (error) throw error;
+}
+
+/** Distinct campaign IDs that still have pending queue rows (for the cron). */
+export async function getCampaignIdsWithPendingQueue(limit = 500): Promise<string[]> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_queue')
+    .select('campaign_id')
+    .eq('status', 'pending')
+    .limit(limit);
+  if (error) throw error;
+  return [...new Set((data ?? []).map(r => r.campaign_id as string))];
+}
+
 // Recipients in the audience who have NOT already been logged for this WhatsApp
 // campaign (i.e. new registrants since it was sent). Mirrors getUnemailedRegistrations.
 // Phones are compared on their last 10 digits so 91-prefix variants still match.

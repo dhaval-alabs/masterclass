@@ -1,43 +1,55 @@
-export const maxDuration = 300; // fires scheduled campaigns (per-recipient loops)
+export const maxDuration = 300;
 import { NextRequest, NextResponse } from 'next/server';
-import { getDueScheduledWhatsAppCampaigns } from '@/lib/db';
-import { fireWhatsAppCampaign } from '@/lib/whatsapp-campaign';
+import { getDueScheduledWhatsAppCampaigns, getCampaignIdsWithPendingQueue } from '@/lib/db';
+import { fireWhatsAppCampaign, drainWhatsAppCampaignQueue } from '@/lib/whatsapp-campaign';
 
 // POST /api/cron/process-whatsapp-queue
-// Called by Vercel Cron every 5 minutes. Fires every WhatsApp campaign whose
-// scheduled_for has passed. Audience is recomputed at fire time so late
-// registrants are included.
+// Called by Vercel Cron every 5 minutes. Two passes:
+//   1. Fire any scheduled campaign whose time has passed (enqueues its audience).
+//   2. Drain a chunk of every campaign that still has pending recipients.
+// Both respect the daily cap; work left over is picked up on the next tick, so
+// any audience size drains safely over multiple ticks without ever timing out.
 export async function POST(req: NextRequest) {
   const auth = req.headers.get('authorization');
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const startedAt = Date.now();
+  const DEADLINE_MS = 220_000; // stop starting new work past this; next tick continues
+
   try {
+    // 1. Fire due scheduled campaigns.
     const due = await getDueScheduledWhatsAppCampaigns(25);
-    if (due.length === 0) {
-      return NextResponse.json({ processed: 0, sent: 0, failed: 0 });
-    }
-
-    let totalSent = 0;
-    let totalFailed = 0;
-    const results: { id: string; status: string; sent: number; failed: number }[] = [];
-
-    // Sequential — sendWhatsAppCampaign already loops recipients; running
-    // campaigns one at a time keeps us well under the API rate ceiling.
+    let scheduledFired = 0;
     for (const campaign of due) {
+      if (Date.now() - startedAt > DEADLINE_MS) break;
       try {
-        const r = await fireWhatsAppCampaign(campaign);
-        totalSent += r.sentCount;
-        totalFailed += r.failedCount;
-        results.push({ id: campaign.id, status: r.status, sent: r.sentCount, failed: r.failedCount });
+        await fireWhatsAppCampaign(campaign);
+        scheduledFired++;
       } catch (err) {
-        console.error(`[cron] whatsapp campaign ${campaign.id} failed:`, err);
-        results.push({ id: campaign.id, status: 'error', sent: 0, failed: 0 });
+        console.error(`[cron] whatsapp scheduled fire ${campaign.id} failed:`, err);
       }
     }
 
-    return NextResponse.json({ processed: due.length, sent: totalSent, failed: totalFailed, results });
+    // 2. Drain pending queues (includes campaigns just fired above).
+    const pendingIds = await getCampaignIdsWithPendingQueue();
+    let queuesDrained = 0;
+    let sent = 0;
+    let stillQueued = 0;
+    for (const id of pendingIds) {
+      if (Date.now() - startedAt > DEADLINE_MS) break;
+      try {
+        const r = await drainWhatsAppCampaignQueue(id);
+        sent += r.sentNow;
+        stillQueued += r.queuedRemaining;
+        queuesDrained++;
+      } catch (err) {
+        console.error(`[cron] whatsapp drain ${id} failed:`, err);
+      }
+    }
+
+    return NextResponse.json({ scheduledFired, queuesDrained, sent, stillQueued, pendingCampaigns: pendingIds.length });
   } catch (err) {
     console.error('[cron] process-whatsapp-queue error:', err);
     return NextResponse.json({ error: String(err) }, { status: 500 });

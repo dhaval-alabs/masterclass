@@ -1,15 +1,15 @@
-export const maxDuration = 300; // per-recipient send loop can run minutes
+export const maxDuration = 300; // inline chunk; the cron drains the rest
 import { NextRequest, NextResponse } from 'next/server';
-import { getWhatsAppCampaignById, getEmailRecipients, updateWhatsAppCampaign, getActiveWebinarSession } from '@/lib/db';
-import { sendWhatsAppCampaign } from '@/lib/whatsapp';
+import { getWhatsAppCampaignById, getEmailRecipients, getActiveWebinarSession } from '@/lib/db';
+import { startCampaignSend } from '@/lib/whatsapp-campaign';
 
+// POST /api/admin/whatsapp/campaigns/:id/retry — re-send to the WHOLE audience.
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  // Optional header-image override — lets you fix campaigns that were created
-  // without an image (image-header templates) without recreating them.
+  // Optional header-image override — lets you fix campaigns created without an image.
   const overrideImage = await req.json().then(b => (b?.headerImageUrl as string | undefined)?.trim() || null).catch(() => null);
 
   try {
@@ -18,52 +18,16 @@ export async function POST(
     if (campaign.status === 'sending') return NextResponse.json({ error: 'Campaign is already sending' }, { status: 409 });
     if (campaign.status === 'sent') return NextResponse.json({ error: 'Campaign already sent successfully' }, { status: 409 });
 
-    const headerImageUrl = overrideImage ?? campaign.headerImageUrl;
-    await updateWhatsAppCampaign(campaign.id, { status: 'sending' });
-
     const session = await getActiveWebinarSession();
     const allRecipients = await getEmailRecipients(campaign.audience, session?.id ?? null);
     const recipients = allRecipients.filter(r => r.phone?.trim());
 
     if (recipients.length === 0) {
-      await updateWhatsAppCampaign(campaign.id, { status: campaign.status });
       return NextResponse.json({ success: false, message: 'No recipients with phone numbers found.' });
     }
 
-    const result = await sendWhatsAppCampaign({
-      campaignId: campaign.id,
-      templateName: campaign.templateName,
-      languageCode: campaign.languageCode,
-      variables: campaign.variables,
-      recipients,
-      headerImageUrl,
-    });
-
-    const finalStatus =
-      result.failedCount === 0 ? 'sent'   :
-      result.sentCount   === 0 ? 'failed' : 'partial';
-
-    await updateWhatsAppCampaign(campaign.id, {
-      status:          finalStatus,
-      sentCount:       result.sentCount,
-      failedCount:     result.failedCount,
-      totalRecipients: recipients.length,
-      errorSummary:    result.errors.length ? result.errors.slice(0, 3).join(' | ') : null,
-      sentAt:          new Date().toISOString(),
-      // Persist a newly-provided image so future retries/send-new reuse it.
-      ...(overrideImage ? { headerImageUrl } : {}),
-    });
-
-    return NextResponse.json({
-      success: result.sentCount > 0,
-      sentCount: result.sentCount,
-      failedCount: result.failedCount,
-      errors: result.errors,
-      message:
-        finalStatus === 'sent'    ? `Retry successful — sent to ${result.sentCount} recipients.` :
-        finalStatus === 'partial' ? `Partial retry — ${result.sentCount}/${recipients.length} sent.` :
-                                    `Retry failed for all ${recipients.length} recipients.`,
-    });
+    const r = await startCampaignSend(campaign, recipients, { headerImageUrl: overrideImage, totalMode: 'set' });
+    return NextResponse.json({ success: r.status !== 'failed', sentCount: r.sentNow, queuedRemaining: r.queuedRemaining, message: r.message });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

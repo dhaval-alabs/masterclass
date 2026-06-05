@@ -493,17 +493,28 @@ export default function WhatsAppTab() {
   useEffect(() => { loadPreview(audience); }, [audience, loadPreview]);
   useEffect(() => { loadCampaigns(); loadDailyCount(); loadOptouts(); }, [loadCampaigns, loadDailyCount, loadOptouts]);
 
-  // Auto-refresh logs for an expanded, recently-sent campaign so delivered/read
-  // statuses (which trickle in via webhook) update live. Stops on collapse.
+  // Auto-refresh logs for an expanded campaign that is still sending (queue
+  // draining) or recently sent (webhook delivered/read trickling in). Stops on collapse.
   useEffect(() => {
     if (!expandedId) return;
     const c = campaigns.find(x => x.id === expandedId);
-    if (!c || (c.status !== "sent" && c.status !== "partial")) return;
-    const sentRecently = c.sentAt ? (Date.now() - new Date(c.sentAt).getTime()) < 24 * 60 * 60 * 1000 : false;
-    if (!sentRecently) return;
-    const id = setInterval(() => { loadCampaignLogs(expandedId, true); }, 30_000);
+    if (!c) return;
+    const isSending = c.status === "sending";
+    const sentRecently = (c.status === "sent" || c.status === "partial")
+      && !!c.sentAt && (Date.now() - new Date(c.sentAt).getTime()) < 24 * 60 * 60 * 1000;
+    if (!isSending && !sentRecently) return;
+    const id = setInterval(() => { loadCampaignLogs(expandedId, true); }, isSending ? 15_000 : 30_000);
     return () => clearInterval(id);
   }, [expandedId, campaigns, loadCampaignLogs]);
+
+  // While any campaign is still sending (background queue draining), refresh the
+  // list + daily count so progress (sent/total, status) updates live.
+  useEffect(() => {
+    const anySending = campaigns.some(c => c.status === "sending");
+    if (!anySending) return;
+    const id = setInterval(() => { loadCampaigns(); loadDailyCount(); }, 20_000);
+    return () => clearInterval(id);
+  }, [campaigns, loadCampaigns, loadDailyCount]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleSend = async () => {

@@ -4,9 +4,10 @@ export const maxDuration = 300;
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getEmailRecipients, getActiveWebinarSession,
-  createWhatsAppCampaign, updateWhatsAppCampaign, listWhatsAppCampaigns,
+  createWhatsAppCampaign, listWhatsAppCampaigns,
 } from '@/lib/db';
-import { sendWhatsAppCampaign, getBroadcastCreds } from '@/lib/whatsapp';
+import { getBroadcastCreds } from '@/lib/whatsapp';
+import { startCampaignSend } from '@/lib/whatsapp-campaign';
 
 export async function GET() {
   try {
@@ -112,41 +113,21 @@ export async function POST(req: NextRequest) {
       languageCode,
       audience: aud,
       variables,
+      headerImageUrl,
       totalRecipients: recipients.length,
       status: 'sending',
     });
 
-    const result = await sendWhatsAppCampaign({
-      campaignId: campaign.id,
-      templateName: templateName.trim(),
-      languageCode,
-      variables,
-      recipients,
-      headerImageUrl,
-    });
-
-    const finalStatus =
-      result.failedCount === 0 ? 'sent'   :
-      result.sentCount   === 0 ? 'failed' : 'partial';
-
-    await updateWhatsAppCampaign(campaign.id, {
-      status:       finalStatus,
-      sentCount:    result.sentCount,
-      failedCount:  result.failedCount,
-      errorSummary: result.errors.length ? result.errors.slice(0, 3).join(' | ') : null,
-      sentAt:       new Date().toISOString(),
-    });
+    // Enqueue + drain the first chunk inline; the cron drains the rest. This
+    // never times out, regardless of audience size.
+    const r = await startCampaignSend(campaign, recipients, { headerImageUrl, totalMode: 'set' });
 
     return NextResponse.json({
-      success: finalStatus !== 'failed',
+      success: r.status !== 'failed',
       configured: true,
-      sentCount: result.sentCount,
-      failedCount: result.failedCount,
-      errors: result.errors,
-      message:
-        finalStatus === 'sent'    ? `Sent to ${result.sentCount} recipients.` :
-        finalStatus === 'partial' ? `Sent to ${result.sentCount}/${recipients.length}. ${result.failedCount} failed.` :
-                                    `Send failed for all ${recipients.length} recipients.`,
+      sentCount: r.sentNow,
+      queuedRemaining: r.queuedRemaining,
+      message: r.message,
     });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
