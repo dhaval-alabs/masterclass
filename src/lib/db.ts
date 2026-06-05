@@ -2892,6 +2892,88 @@ export async function getWhatsAppCampaignLogCounts(
   };
 }
 
+// ── Cross-channel analytics overview ──────────────────────────────────────────
+
+export interface AnalyticsOverview {
+  email:    { campaigns: number; recipients: number; sent: number; opened: number; clicks: number; failed: number; openRate: number; clickRate: number };
+  whatsapp: { campaigns: number; recipients: number; sent: number; delivered: number; read: number; failed: number; deliveryRate: number; readRate: number };
+  optouts: number;
+  whatsappDaily: { sent: number; limit: number };
+}
+
+export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
+  const supabase = client();
+  const pctI = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
+
+  // Email — sum the per-campaign counters.
+  const emailCamps = await listEmailCampaigns();
+  const e = emailCamps.reduce(
+    (a, c) => ({
+      recipients: a.recipients + c.totalRecipients,
+      sent:       a.sent + c.sentCount,
+      opened:     a.opened + c.uniqueOpenCount,
+      clicks:     a.clicks + c.clickCount,
+      failed:     a.failed + c.failedCount,
+    }),
+    { recipients: 0, sent: 0, opened: 0, clicks: 0, failed: 0 },
+  );
+
+  // WhatsApp — stored counters for sent/failed/recipients.
+  const waCamps = await listWhatsAppCampaigns();
+  const waStored = waCamps.reduce(
+    (a, c) => ({ recipients: a.recipients + c.totalRecipients, sent: a.sent + c.sentCount, failed: a.failed + c.failedCount }),
+    { recipients: 0, sent: 0, failed: 0 },
+  );
+
+  // WhatsApp delivered/read — dedup the send log per (campaign, phone), best status.
+  const { data: waLog } = await supabase
+    .schema('excel_to_ai')
+    .from('whatsapp_send_log')
+    .select('campaign_id, phone, status');
+  const rank: Record<string, number> = { read: 4, delivered: 3, sent: 2, failed: 1, skipped: 0 };
+  const best = new Map<string, string>();
+  for (const r of waLog ?? []) {
+    const key = `${r.campaign_id}|${(r.phone as string || '').replace(/\D/g, '').slice(-10)}`;
+    const s = r.status as string;
+    const cur = best.get(key);
+    if (cur === undefined || (rank[s] ?? -1) > (rank[cur] ?? -1)) best.set(key, s);
+  }
+  let waDelivered = 0, waRead = 0;
+  for (const s of best.values()) {
+    if (s === 'read') { waRead++; waDelivered++; }
+    else if (s === 'delivered') { waDelivered++; }
+  }
+
+  const { count: optouts } = await supabase
+    .schema('excel_to_ai')
+    .from('whatsapp_optouts')
+    .select('*', { count: 'exact', head: true });
+
+  const dailySent = await getWhatsAppDailySentCount();
+  const limit = parseInt(process.env.WA_DAILY_LIMIT ?? '900', 10);
+
+  return {
+    email: {
+      campaigns: emailCamps.length,
+      ...e,
+      openRate: pctI(e.opened, e.sent),
+      clickRate: pctI(e.clicks, e.sent),
+    },
+    whatsapp: {
+      campaigns: waCamps.length,
+      recipients: waStored.recipients,
+      sent: waStored.sent,
+      delivered: waDelivered,
+      read: waRead,
+      failed: waStored.failed,
+      deliveryRate: pctI(waDelivered, waStored.sent),
+      readRate: pctI(waRead, waDelivered),
+    },
+    optouts: optouts ?? 0,
+    whatsappDaily: { sent: dailySent, limit },
+  };
+}
+
 // ── WhatsApp send queue (background batched delivery) ─────────────────────────
 
 /**
