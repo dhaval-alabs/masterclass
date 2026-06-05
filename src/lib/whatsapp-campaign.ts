@@ -13,11 +13,13 @@ import {
 } from './db';
 import { sendWhatsAppCampaign, getBroadcastCreds } from './whatsapp';
 
-// How many recipients we attempt per chunk. Sized to finish well within the
-// 300s function limit (~0.4s/recipient + batch pauses). Sends larger than this
-// spill to the queue and drain over subsequent cron ticks.
-const INLINE_CHUNK = 250; // attempted within the request that triggered the send
-const CRON_CHUNK   = 250; // attempted per campaign per cron tick
+// How many recipients we attempt per chunk. Default 80 fits Vercel Hobby's 60s
+// function limit (~0.4s/recipient + batch pauses ≈ 45s); raise WA_SEND_CHUNK on
+// Pro (300s) to e.g. 250 for faster drains. Sends larger than this spill to the
+// queue and drain over subsequent cron ticks.
+const CHUNK = Math.max(1, parseInt(process.env.WA_SEND_CHUNK ?? '80', 10));
+const INLINE_CHUNK = CHUNK; // attempted within the request that triggered the send
+const CRON_CHUNK   = CHUNK; // attempted per campaign per cron tick
 
 export interface DrainResult {
   processedNow: number;

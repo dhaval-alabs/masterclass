@@ -16,7 +16,9 @@ export async function POST(req: NextRequest) {
   }
 
   const startedAt = Date.now();
-  const DEADLINE_MS = 220_000; // stop starting new work past this; next tick continues
+  // Stop starting new work past this; next tick continues. 45s keeps us safely
+  // under Vercel Hobby's 60s function limit (Pro allows more, but this is fine).
+  const DEADLINE_MS = 45_000;
 
   try {
     // 1. Fire due scheduled campaigns.
