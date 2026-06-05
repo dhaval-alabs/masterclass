@@ -162,6 +162,41 @@ export default function AnalyticsTab() {
 
   const reachMax = Math.max(email.sent, wa.sent, 1);
 
+  // Auto-insights — plain-language callouts, prioritised.
+  const insights: { tone: "good" | "warn" | "info"; text: string }[] = [];
+  if (wa.readRate >= email.openRate && email.openRate > 0)
+    insights.push({ tone: "good", text: `WhatsApp reads (${wa.readRate}%) beat email opens (${email.openRate}%) by ~${(wa.readRate / Math.max(1, email.openRate)).toFixed(1)}× — lead your reminders with WhatsApp.` });
+  else if (email.openRate > wa.readRate && wa.readRate > 0)
+    insights.push({ tone: "info", text: `Email opens (${email.openRate}%) are currently ahead of WhatsApp reads (${wa.readRate}%).` });
+  if (funnel.attended > 0 && funnel.remindedAttendRate - funnel.notRemindedAttendRate > 0)
+    insights.push({ tone: "good", text: `Reminded people attended at ${funnel.remindedAttendRate}% vs ${funnel.notRemindedAttendRate}% of those not reached — reminders lifted attendance by ${funnel.remindedAttendRate - funnel.notRemindedAttendRate} points.` });
+  {
+    const hot = funnel.byLeadScore.find(s => s.score === "hot");
+    const cold = funnel.byLeadScore.find(s => s.score === "cold");
+    if (hot && hot.total > 0 && cold && cold.total > 0) {
+      const hotAtt = Math.round((hot.attended / hot.total) * 100);
+      const coldAtt = Math.round((cold.attended / cold.total) * 100);
+      if (hotAtt > coldAtt) insights.push({ tone: "info", text: `Hot leads attend at ${hotAtt}% vs ${coldAtt}% for cold — prioritise hot leads for calls and WhatsApp.` });
+    }
+  }
+  const pending = Math.max(0, wa.sent - wa.delivered);
+  if (wa.delivered > 0 && pending > 0)
+    insights.push({ tone: "info", text: `${pending.toLocaleString()} WhatsApp messages are pending delivery (recipients' phones likely off) — they usually land later.` });
+  const capPct = whatsappDaily.limit ? Math.round((whatsappDaily.sent / whatsappDaily.limit) * 100) : 0;
+  if (capPct >= 80)
+    insights.push({ tone: "warn", text: `WhatsApp daily usage is at ${capPct}% (${whatsappDaily.sent}/${whatsappDaily.limit}) — space out large sends to stay within your tier.` });
+  if (bestTime.topLabel)
+    insights.push({ tone: "good", text: `Recipients engage most around ${bestTime.topLabel} (IST) — schedule reminders to land just before then.` });
+  if (optouts > 0)
+    insights.push({ tone: "info", text: `${optouts} ${optouts === 1 ? "person has" : "people have"} opted out of WhatsApp — automatically excluded from sends.` });
+
+  const toneClasses: Record<string, string> = {
+    good: "bg-[#00DF83]/10 border-[#00DF83]/30 text-[#003368]",
+    warn: "bg-amber-50 border-amber-200 text-amber-800",
+    info: "bg-slate-50 border-slate-200 text-slate-600",
+  };
+  const toneDot: Record<string, string> = { good: "bg-[#00875A]", warn: "bg-amber-500", info: "bg-slate-400" };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -206,6 +241,21 @@ export default function AnalyticsTab() {
           <p className="text-[11px] text-slate-500 mt-0.5">fail rate · {optouts} opted out</p>
         </div>
       </div>
+
+      {/* Auto-insights — what the numbers mean */}
+      {insights.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <h3 className="text-sm font-bold text-[#003368] mb-3">What this tells you</h3>
+          <ul className="space-y-2">
+            {insights.slice(0, 6).map((ins, i) => (
+              <li key={i} className={`flex items-start gap-2.5 text-xs border rounded-lg px-3 py-2 ${toneClasses[ins.tone]}`}>
+                <span className={`w-2 h-2 rounded-full mt-1 shrink-0 ${toneDot[ins.tone]}`} />
+                <span className="leading-relaxed">{ins.text}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Channel comparison */}
       <div className="bg-slate-50 rounded-xl border border-slate-200 p-5">
