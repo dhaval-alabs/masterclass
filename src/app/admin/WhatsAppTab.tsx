@@ -587,6 +587,33 @@ export default function WhatsAppTab() {
     return () => clearInterval(id);
   }, [campaigns, loadCampaigns, loadDailyCount]);
 
+  // Client-driven drain: while this page is open, repeatedly ask the server to
+  // drain a chunk until the queue is empty. This finishes large sends even on
+  // Vercel Hobby (where the cron only runs ~daily) — no external cron needed
+  // while an admin is watching. A ref prevents overlapping drain loops.
+  const drainingRef = useRef(false);
+  const drainLoop = useCallback(async () => {
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    try {
+      for (let i = 0; i < 100; i++) {
+        const res = await fetch("/api/admin/whatsapp/drain", { method: "POST" });
+        const data = await readJson(res).catch(() => null);
+        loadCampaigns();
+        loadDailyCount();
+        if (!data || (data.pendingCampaigns ?? 0) === 0) break;
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    } catch { /* stop; a later mount/send retries */ }
+    finally { drainingRef.current = false; }
+  }, [loadCampaigns, loadDailyCount]);
+
+  // Kick the drain on mount (clears any leftover pending) and whenever a campaign
+  // is sending. The ref guard makes repeated triggers a no-op while one runs.
+  useEffect(() => {
+    if (campaigns.some(c => c.status === "sending")) drainLoop();
+  }, [campaigns, drainLoop]);
+
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleSend = async () => {
     if (!templateName.trim()) {
