@@ -6,6 +6,7 @@ import {
   enqueueWhatsAppRecipients,
   claimPendingWhatsAppQueue,
   countPendingWhatsAppQueue,
+  countWhatsAppQueueTotal,
   markWhatsAppQueueProcessed,
   getWhatsAppCampaignLogCounts,
   getWhatsAppDailySentCount,
@@ -89,9 +90,12 @@ export async function drainWhatsAppCampaignQueue(
     }
   }
 
-  // Recompute counters from the log (deduped), keep totalRecipients fixed.
+  // Recompute counters from the log (deduped). Total = the real audience we
+  // enqueued (non-cancelled queue rows) so it's always >= sent and reflects the
+  // full send, not just what's processed so far.
   const counts = await getWhatsAppCampaignLogCounts(campaignId);
   const queuedRemaining = await countPendingWhatsAppQueue(campaignId);
+  const queueTotal = await countWhatsAppQueueTotal(campaignId);
 
   const status: WhatsAppCampaign['status'] =
     queuedRemaining > 0      ? 'sending' :
@@ -114,6 +118,8 @@ export async function drainWhatsAppCampaignQueue(
     status,
     sentCount: counts.sent,
     failedCount: counts.failed,
+    // Keep total = the enqueued audience (never less than what's been sent).
+    ...(queueTotal > 0 ? { totalRecipients: Math.max(queueTotal, counts.sent + counts.failed) } : {}),
     sentAt: campaign.sentAt ?? new Date().toISOString(),
     errorSummary,
   });

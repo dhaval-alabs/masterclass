@@ -3106,6 +3106,18 @@ export async function countPendingWhatsAppQueue(campaignId: string): Promise<num
   return count ?? 0;
 }
 
+/** Total enqueued recipients for a campaign (excludes cancelled) — the real audience size. */
+export async function countWhatsAppQueueTotal(campaignId: string): Promise<number> {
+  const { count, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_queue')
+    .select('*', { count: 'exact', head: true })
+    .eq('campaign_id', campaignId)
+    .neq('status', 'cancelled');
+  if (error) throw error;
+  return count ?? 0;
+}
+
 /** Fetch up to `limit` pending queue rows for a campaign (oldest first). */
 export async function claimPendingWhatsAppQueue(
   campaignId: string,
