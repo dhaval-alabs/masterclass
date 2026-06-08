@@ -70,10 +70,15 @@ export async function POST(req: NextRequest) {
     if (score !== 'cold' && (email || phone)) {
       const eventName = score === 'junk' ? 'JunkLead' : 'QualifiedLead';
       const clientCtx = extractClientContext(req);
+      // Deterministic event_id keyed on the registration so a repeated qualify
+      // (re-chat, network retry, double-submit) dedups at Meta instead of
+      // double-counting — mirrors the `attended_${id}` pattern. Falls back to a
+      // random id only when there's no registration to key on (can't dedup then).
+      const qualifyEventId = registrationId ? `qualify_${registrationId}` : crypto.randomUUID();
       sendMetaCapiEvent({
         eventName,
         eventTime: Math.floor(Date.now() / 1000),
-        eventId: crypto.randomUUID(),
+        eventId: qualifyEventId,
         userData: {
           email: email ?? undefined,
           phone: phone ?? undefined,

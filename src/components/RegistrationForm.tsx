@@ -128,6 +128,7 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
 
   const utmRef = useRef<any>({});
   const gclidRef = useRef<string | null>(null);
+  const fbclidRef = useRef<string | null>(null);
   const behaviourSnapshotRef = useRef<any>({});
   const leadEventIdRef = useRef<string>('');
 
@@ -217,6 +218,14 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
     if (gclid) {
       gclidRef.current = gclid;
       sessionStorage.setItem("gclid", gclid);
+    }
+    // Meta click id — persist across the session like gclid. The _fbc cookie
+    // (set by the Pixel from this) is the preferred CAPI value, but we keep the
+    // raw fbclid too in case the cookie hasn't been written yet.
+    const fbclid = params.get("fbclid") || sessionStorage.getItem("fbclid");
+    if (fbclid) {
+      fbclidRef.current = fbclid;
+      sessionStorage.setItem("fbclid", fbclid);
     }
 
     // Pre-fill City from Vercel edge geolocation (IP → city, no permission prompt).
@@ -318,6 +327,7 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
           eventId: leadEventIdRef.current,
           fbp,
           fbc,
+          fbclid: fbclidRef.current,
         }),
       });
       const result = await res.json();

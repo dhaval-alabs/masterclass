@@ -139,6 +139,11 @@ export async function POST(req: NextRequest) {
         whatsappStatus: 'pending',
         whatsappError: null,
         sessionId: config.activeSessionId,
+        // Meta click identifiers — persisted so the server-side WebinarAttended
+        // CAPI event can reuse them and so we can forward mx_FBCLID to LSQ.
+        fbc: typeof body.fbc === 'string' ? body.fbc : null,
+        fbp: typeof body.fbp === 'string' ? body.fbp : null,
+        fbclid: typeof body.fbclid === 'string' ? body.fbclid : null,
       });
       registrationId = created.id;
 
@@ -175,6 +180,9 @@ export async function POST(req: NextRequest) {
       { Attribute: 'mx_City_name', Value: city },
       { Attribute: 'Source',       Value: typeFilter || config?.lsqSourceName?.trim() || 'PPC-SM' },
       { Attribute: 'mx_GCLID',     Value: body.gclid || '' },
+      // Meta click id for CRM→Meta event matching. Prefer the formatted _fbc
+      // cookie (what Meta CAPI expects); fall back to the raw fbclid param.
+      { Attribute: 'mx_FBCLID',    Value: body.fbc || body.fbclid || '' },
       { Attribute: 'mx_OTP_Status', Value: 'Unverified' },
       { Attribute: notesFieldName, Value: notesLines.join('\n') },
     ];

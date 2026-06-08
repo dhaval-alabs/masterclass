@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Conversion Tracking Overview — AnalytixLabs Masterclass</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1e293b; margin: 0; line-height: 1.5; font-size: 12px;
+  }
+  h1, h2, h3 { color: #003368; margin: 0 0 8px; line-height: 1.2; }
+  h1 { font-size: 26px; }
+  h2 { font-size: 17px; margin-top: 26px; padding-bottom: 6px; border-bottom: 2px solid #00DF83; }
+  h3 { font-size: 13px; margin-top: 14px; color: #00875A; }
+  p { margin: 0 0 9px; }
+  .muted { color: #64748b; }
+  .small { font-size: 10.5px; }
+  a { color: #0369a1; text-decoration: none; }
+
+  /* Cover */
+  .cover {
+    background: linear-gradient(135deg, #003368 0%, #0a4f9e 100%);
+    color: #fff; padding: 46px 40px; border-radius: 14px; margin-bottom: 22px;
+  }
+  .cover h1 { color: #fff; margin-bottom: 10px; }
+  .cover .sub { color: #bfe6ff; font-size: 14px; max-width: 78%; }
+  .cover .pill {
+    display: inline-block; background: #00DF83; color: #003368; font-weight: 700;
+    font-size: 11px; padding: 5px 12px; border-radius: 999px; margin-bottom: 18px; letter-spacing: .04em;
+  }
+  .meta-row { margin-top: 22px; font-size: 11px; color: #cfe8ff; }
+  .meta-row b { color: #fff; }
+
+  /* Layout helpers */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .card {
+    border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; background: #fff;
+  }
+  .card.tint { background: #f0fdf6; border-color: #bbf7d6; }
+  .card.blue { background: #eff6ff; border-color: #bfdbfe; }
+  .card.amber { background: #fffbeb; border-color: #fde68a; }
+  .kpi { font-size: 22px; font-weight: 800; color: #003368; }
+  .kpi span { font-size: 12px; font-weight: 600; color: #64748b; }
+  .label { font-size: 11px; color: #475569; }
+
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 4px; font-size: 11px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid #e9eef4; vertical-align: top; }
+  th { background: #f1f5f9; color: #003368; font-weight: 700; }
+  .tag { display: inline-block; padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 700; }
+  .tag.both { background: #dcfce7; color: #15803d; }
+  .tag.capi { background: #dbeafe; color: #1d4ed8; }
+  .tag.pixel { background: #f3e8ff; color: #7e22ce; }
+  .tag.no { background: #f1f5f9; color: #94a3b8; }
+
+  .flow {
+    background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 16px 18px;
+    font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 10.5px; line-height: 1.7; white-space: pre;
+  }
+  .flow .g { color: #4ade80; } .flow .b { color: #60a5fa; } .flow .y { color: #fbbf24; } .flow .m { color: #94a3b8; }
+
+  ul { margin: 4px 0 10px; padding-left: 18px; }
+  li { margin-bottom: 5px; }
+
+  .step { display: flex; gap: 12px; margin-bottom: 12px; }
+  .step .num {
+    flex: 0 0 26px; height: 26px; width: 26px; border-radius: 50%; background: #003368; color: #fff;
+    font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 12px;
+  }
+  .step .body { flex: 1; }
+  .step .body b { color: #003368; }
+
+  .callout {
+    border-left: 4px solid #00DF83; background: #f0fdf6; padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 10px 0;
+  }
+  .callout.warn { border-left-color: #f59e0b; background: #fffbeb; }
+
+  .pagebreak { page-break-before: always; }
+  footer { margin-top: 26px; padding-top: 10px; border-top: 1px solid #e2e8f0; color: #94a3b8; font-size: 10px; }
+</style>
+</head>
+<body>
+
+<!-- ───────────────────────── COVER ───────────────────────── -->
+<div class="cover">
+  <div class="pill">CONVERSION TRACKING · OVERVIEW</div>
+  <h1>How We Track &amp; Optimise<br>Webinar Conversions on Meta</h1>
+  <div class="sub">A plain-language explanation of the dual-channel (Pixel + Conversions API) tracking system powering the AnalytixLabs "Excel to AI" Masterclass — and what it delivers for ad performance.</div>
+  <div class="meta-row">
+    Prepared for <b>Stakeholder review</b> &nbsp;·&nbsp; Platform: <b>Meta (Facebook / Instagram) Ads</b> &nbsp;·&nbsp; Date: <b>8 June 2026</b>
+  </div>
+</div>
+
+<!-- ───────────────────────── EXECUTIVE SUMMARY ───────────────────────── -->
+<h2>The one-paragraph summary</h2>
+<p>
+Every meaningful action a prospect takes — visiting the page, registering, verifying their phone (OTP),
+qualifying as a lead, and <b>actually attending the webinar</b> — is reported back to Meta. We send these
+signals through <b>two independent channels at once</b>: the <b>browser Pixel</b> and Meta's <b>Conversions API
+(server-side)</b>. Both carry a shared ID so Meta counts each conversion <b>once</b> but with the matching
+strength of both. The result: Meta's AI can find more people like our <i>best</i> prospects — the ones who
+verify and attend — which lowers cost-per-registration and improves lead quality over time.
+</p>
+
+<div class="grid3" style="margin-top:14px;">
+  <div class="card tint">
+    <div class="kpi">2×</div>
+    <div class="label">delivery channels per event (Pixel + Server API) for maximum reliability</div>
+  </div>
+  <div class="card blue">
+    <div class="kpi">5</div>
+    <div class="label">funnel stages tracked, from page view all the way to verified attendance</div>
+  </div>
+  <div class="card amber">
+    <div class="kpi">100%</div>
+    <div class="label">of personal data is encrypted (hashed) before it ever reaches Meta</div>
+  </div>
+</div>
+
+<!-- ───────────────────────── WHY ───────────────────────── -->
+<h2>Why this matters (the business case)</h2>
+<div class="grid2">
+  <div class="card">
+    <h3>Lower cost per result</h3>
+    <p class="small">By telling Meta exactly who registered and attended, its algorithm optimises ad delivery toward similar people — not just clicks. Over time this reduces cost-per-registration and wasted spend.</p>
+  </div>
+  <div class="card">
+    <h3>Optimise for quality, not just volume</h3>
+    <p class="small">We don't just send "someone filled a form." We send <b>verified registrations</b> and <b>actual attendance + watch time</b> — so Meta learns to find serious prospects, not tyre-kickers.</p>
+  </div>
+  <div class="card">
+    <h3>Accurate measurement</h3>
+    <p class="small">iOS limits and ad-blockers break browser-only tracking. The server-side channel recovers those lost conversions, so reported numbers stay accurate and ROAS is trustworthy.</p>
+  </div>
+  <div class="card">
+    <h3>Powerful audiences</h3>
+    <p class="small">Because attendance flows to Meta, we can build <b>lookalike audiences of attendees</b> and <b>retarget no-shows</b> — the highest-leverage audiences we own.</p>
+  </div>
+</div>
+
+<!-- ───────────────────────── HOW (FUNNEL) ───────────────────────── -->
+<div class="pagebreak"></div>
+<h2>What we track — the full funnel</h2>
+<p class="muted small">Each row is an event sent to Meta. "Both" = sent via Pixel <i>and</i> server API (de-duplicated); "Server API" = sent reliably from our backend even after the user has left the site.</p>
+<table>
+  <thead>
+    <tr><th style="width:22%">Stage</th><th style="width:24%">Event sent to Meta</th><th style="width:18%">Channel</th><th>What it tells Meta</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><b>1. Page visit</b></td><td>PageView</td><td><span class="tag pixel">Pixel</span></td><td>Someone landed on the registration page.</td></tr>
+    <tr><td><b>2. Registration</b></td><td>Lead</td><td><span class="tag both">Both</span></td><td>A prospect submitted the form — a fresh lead.</td></tr>
+    <tr><td><b>3. OTP verified</b></td><td>CompleteRegistration</td><td><span class="tag both">Both</span></td><td>The lead confirmed their phone — a <b>real, contactable</b> registration.</td></tr>
+    <tr><td><b>4. Lead qualified</b></td><td>QualifiedLead / JunkLead</td><td><span class="tag capi">Server API</span></td><td>Our AI scored the lead's intent (hot / warm vs. junk).</td></tr>
+    <tr><td><b>5. Attended webinar</b></td><td>WebinarAttended</td><td><span class="tag capi">Server API</span></td><td>The person <b>actually showed up</b> — plus how long they watched.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <b>The signal that matters most:</b> Stage 5 (<b>WebinarAttended</b>) is what separates this setup from a basic
+  funnel. Most advertisers stop at "form filled." We close the loop all the way to <b>verified attendance and watch
+  time</b>, pulled automatically from Zoom — so Meta optimises toward people who genuinely engage.
+</div>
+
+<!-- ───────────────────────── THE MECHANISM ───────────────────────── -->
+<h2>How it works — the dual-channel mechanism</h2>
+
+<div class="step">
+  <div class="num">A</div>
+  <div class="body">
+    <b>Browser Pixel (client-side).</b> A small Meta script loads on the website. The instant a prospect registers
+    or verifies, it fires the event straight to Meta from their browser — carrying ad-cookie signals
+    (<span class="small">_fbp / _fbc</span>) that link the action back to the ad they clicked.
+  </div>
+</div>
+<div class="step">
+  <div class="num">B</div>
+  <div class="body">
+    <b>Conversions API (server-side).</b> At the same moment, our server sends the <i>same</i> event directly to
+    Meta — independent of the browser. This is immune to ad-blockers, browser crashes, and iOS tracking limits.
+    For attendance and lead-scoring (which happen after the user has left), this is the <b>only</b> channel.
+  </div>
+</div>
+<div class="step">
+  <div class="num">C</div>
+  <div class="body">
+    <b>Shared Event ID = no double counting.</b> Both copies carry one identical ID. Meta recognises them as the
+    same conversion and <b>merges them into one</b> — keeping the report accurate while combining the matching
+    signals from both channels for the best possible accuracy.
+  </div>
+</div>
+<div class="step">
+  <div class="num">D</div>
+  <div class="body">
+    <b>Privacy by design.</b> Before any personal detail (email, phone, name, city) leaves our system on the
+    server channel, it is <b>irreversibly encrypted (SHA-256 hashed)</b>. Meta matches on the encrypted value —
+    it never receives readable personal data. This keeps us aligned with privacy best practice.
+  </div>
+</div>
+
+<div class="flow">┌─────────────────┐
+│  Prospect acts  │   (registers · verifies OTP · attends)
+└────────┬────────┘
+         │
+   ┌─────┴───────────────────────────┐
+   ▼                                 ▼
+<span class="m">Browser Pixel</span>                      <span class="b">Server-side Conversions API</span>
+<span class="m">(carries ad cookies)</span>              <span class="b">(encrypted data · always reliable)</span>
+   │                                 │
+   └──────────  same Event ID  ──────┘
+                    │
+                    ▼
+            <span class="g">META de-duplicates → 1 conversion, maximum match quality</span>
+                    │
+                    ▼
+   <span class="y">Optimised ad delivery · Lookalike audiences · Accurate ROAS</span></div>
+
+<!-- ───────────────────────── MATCH QUALITY ───────────────────────── -->
+<div class="pagebreak"></div>
+<h2>Data quality &amp; what Meta receives</h2>
+<p class="small muted">"Match quality" = how reliably Meta can connect a conversion to a real ad-clicker. Higher match = better optimisation.</p>
+<div class="grid3">
+  <div class="card tint">
+    <h3 style="margin-top:0;">High match</h3>
+    <p class="small">Registration &amp; OTP-verified events — sent on both channels with ad cookies + encrypted contact details.</p>
+  </div>
+  <div class="card blue">
+    <h3 style="margin-top:0;">Good match</h3>
+    <p class="small">Lead qualification — encrypted email &amp; phone from the server, strong identity match.</p>
+  </div>
+  <div class="card amber">
+    <h3 style="margin-top:0;">Solid match</h3>
+    <p class="small">Webinar attendance — encrypted email &amp; phone. (Can be raised further; see roadmap.)</p>
+  </div>
+</div>
+
+<h3>What is shared with Meta (all encrypted)</h3>
+<ul class="small">
+  <li>Email, phone, first/last name, city, country — <b>SHA-256 hashed before sending</b>; Meta cannot read the originals.</li>
+  <li>Ad-click cookies (_fbp / _fbc) and the page URL — used purely to match the conversion to the originating ad.</li>
+  <li>Event-specific context — e.g. lead score (hot/warm), and for attendance: <b>watch duration</b> and which webinar session.</li>
+</ul>
+
+<!-- ───────────────────────── ROADMAP ───────────────────────── -->
+<h2>What this unlocks next</h2>
+<div class="grid2">
+  <div class="card">
+    <h3>Attendee Lookalike audiences</h3>
+    <p class="small">Use the WebinarAttended signal to ask Meta for "more people like our attendees" — typically the cheapest, highest-converting prospecting audience.</p>
+  </div>
+  <div class="card">
+    <h3>No-show retargeting &amp; suppression</h3>
+    <p class="small">Optionally emit a "No-show" signal to re-engage drop-offs with the recording, or suppress already-converted users to save budget.</p>
+  </div>
+  <div class="card">
+    <h3>Optimise toward attendance</h3>
+    <p class="small">Shift campaign optimisation from "registration" to "verified attendance," so spend chases the outcome that actually drives revenue.</p>
+  </div>
+  <div class="card">
+    <h3>Even higher match quality</h3>
+    <p class="small">Carry ad-click cookies through to the attendance event to lift its match rate from "solid" to "high."</p>
+  </div>
+</div>
+
+<div class="callout warn">
+  <b>One dependency to confirm:</b> the server-side relay for Registration &amp; OTP events runs through a tag
+  manager (Stape sGTM). It's worth a quick check in Meta Events Manager that those two events show
+  <i>"Browser + Server"</i> — confirming both channels are live. Attendance &amp; lead-scoring send to the server
+  API directly and are not affected.
+</div>
+
+<footer>
+  Confidential — AnalytixLabs "Excel to AI" Masterclass · Conversion Tracking Overview · Generated 8 June 2026.
+  This document describes data flow at a conceptual level for stakeholder understanding; technical implementation details are maintained by the engineering team.
+</footer>
+
+</body>
+</html>

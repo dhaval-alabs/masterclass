@@ -181,6 +181,10 @@ export async function POST(request: Request) {
             city: reg.city,
             country: 'in',
             externalId: reg.id,
+            // Meta click identifiers captured at registration (migration 0025) —
+            // raise this server-side event's match quality from "solid" to "high".
+            fbc: reg.fbc ?? undefined,
+            fbp: reg.fbp ?? undefined,
           },
           customData: {
             content_name: 'ExcelToAI_Masterclass',

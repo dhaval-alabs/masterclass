@@ -39,6 +39,11 @@ export interface Registration {
   chatConversation?: Array<{ role: string; content: string }> | null;
   zoomRegistered?: boolean | null;
   zoomJoinUrl?: string | null;
+  // Meta click identifiers, captured at lead creation (see migration 0025).
+  // fbc = _fbc cookie (fb.1.<ts>.<fbclid>), fbp = _fbp cookie, fbclid = raw URL param.
+  fbc?: string | null;
+  fbp?: string | null;
+  fbclid?: string | null;
 }
 
 export interface Faq {
@@ -411,6 +416,9 @@ type RegistrationRow = {
   chat_conversation?: Array<{ role: string; content: string }> | null;
   zoom_registered?: boolean | null;
   zoom_join_url?: string | null;
+  fbc?: string | null;
+  fbp?: string | null;
+  fbclid?: string | null;
 };
 
 type FaqRow = {
@@ -453,6 +461,9 @@ function mapRegistration(row: RegistrationRow): Registration {
     chatConversation: row.chat_conversation ?? null,
     zoomRegistered: row.zoom_registered ?? null,
     zoomJoinUrl: row.zoom_join_url ?? null,
+    fbc: row.fbc ?? null,
+    fbp: row.fbp ?? null,
+    fbclid: row.fbclid ?? null,
   };
 }
 
@@ -779,6 +790,9 @@ export async function addUnverifiedRegistration(
     verified_at: null,
     attempt_number: attemptNumber,
     session_id: sessionId,
+    fbc: reg.fbc ?? null,
+    fbp: reg.fbp ?? null,
+    fbclid: reg.fbclid ?? null,
   };
   const { error } = await supabase.from('registrations').insert(row);
   if (error) throw error;
