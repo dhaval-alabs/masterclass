@@ -76,6 +76,14 @@ type WebinarConfig = {
 
 type AdminTab = 'settings' | 'webinar' | 'features' | 'agenda' | 'registrations' | 'faqs' | 'team' | 'sessions' | 'email' | 'whatsapp' | 'analytics';
 
+// Formats total webinar watch time (minutes) as "53m" or "1h 3m".
+function formatWatchDuration(min: number): string {
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
 export default function AdminPortal() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<AdminTab>("settings");
@@ -98,6 +106,8 @@ export default function AdminPortal() {
   const [regPageSize, setRegPageSize] = useState(50);
   const [regTotal, setRegTotal] = useState(0);
   const [regScoreFilter, setRegScoreFilter] = useState<string>('');
+  const [regAttendedFilter, setRegAttendedFilter] = useState<string>('');
+  const [regStatusFilter, setRegStatusFilter] = useState<string>('');
   // Collapse a person's repeat attempts into one row (default on).
   const [regUnique, setRegUnique] = useState(true);
   const [regStats, setRegStats] = useState<{ total: number; verified: number; unverified: number; uniqueEmailsStarted: number; uniqueEmailsVerified: number; hot: number; warm: number; cold: number; junk: number; unscored: number } | null>(null);
@@ -172,10 +182,12 @@ export default function AdminPortal() {
     fetch('/api/settings').then(res => res.json()).then(data => setSettings(data));
   }, []);
 
-  const loadRegistrations = (page = regPage, pageSize = regPageSize, scoreFilter = regScoreFilter, unique = regUnique) => {
+  const loadRegistrations = (page = regPage, pageSize = regPageSize, scoreFilter = regScoreFilter, unique = regUnique, attendedFilter = regAttendedFilter, statusFilter = regStatusFilter) => {
     setIsLoadingRegs(true);
     const scoreParam = scoreFilter ? `&score=${encodeURIComponent(scoreFilter)}` : '';
-    fetch(`/api/register?page=${page}&pageSize=${pageSize}&stats=1&unique=${unique ? 1 : 0}${scoreParam}`)
+    const attendedParam = attendedFilter ? `&attended=${encodeURIComponent(attendedFilter)}` : '';
+    const statusParam = statusFilter ? `&regStatus=${encodeURIComponent(statusFilter)}` : '';
+    fetch(`/api/register?page=${page}&pageSize=${pageSize}&stats=1&unique=${unique ? 1 : 0}${scoreParam}${attendedParam}${statusParam}`)
       .then(res => res.json())
       .then((res: { data: any[]; total: number; stats?: typeof regStats }) => {
         setRegistrations(Array.isArray(res?.data) ? res.data : []);
@@ -248,10 +260,13 @@ export default function AdminPortal() {
       .finally(() => setIsCheckingGemini(false));
   };
 
-  // CSV export
+  // CSV export — mirrors the active table filters.
   const handleExport = () => {
-    const scoreParam = regScoreFilter ? `&score=${encodeURIComponent(regScoreFilter)}` : '';
-    window.open(`/api/admin/registrations/export?${scoreParam}`, '_blank');
+    const params = new URLSearchParams();
+    if (regScoreFilter) params.set('score', regScoreFilter);
+    if (regAttendedFilter) params.set('attended', regAttendedFilter);
+    if (regStatusFilter) params.set('regStatus', regStatusFilter);
+    window.open(`/api/admin/registrations/export?${params.toString()}`, '_blank');
   };
 
   const loadLatestAttendanceSync = () => {
@@ -900,6 +915,37 @@ export default function AdminPortal() {
                   <option value="junk">Junk</option>
                   <option value="unscored">Not yet scored</option>
                 </select>
+                <select
+                  value={regAttendedFilter}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setRegAttendedFilter(v);
+                    setRegPage(1);
+                    loadRegistrations(1, regPageSize, regScoreFilter, regUnique, v, regStatusFilter);
+                  }}
+                  className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700"
+                  title="Filter by webinar attendance"
+                >
+                  <option value="">All attendance</option>
+                  <option value="attended">Attended only</option>
+                  <option value="noshow">No-shows only</option>
+                  <option value="pending">Not synced yet</option>
+                </select>
+                <select
+                  value={regStatusFilter}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setRegStatusFilter(v);
+                    setRegPage(1);
+                    loadRegistrations(1, regPageSize, regScoreFilter, regUnique, regAttendedFilter, v);
+                  }}
+                  className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700"
+                  title="Filter by OTP verification status"
+                >
+                  <option value="">All statuses</option>
+                  <option value="Verified">Verified</option>
+                  <option value="Unverified">Unverified</option>
+                </select>
                 <button
                   onClick={showBreakdown ? () => setShowBreakdown(false) : handleLoadBreakdown}
                   className="text-xs font-semibold text-[#003368] border border-slate-300 rounded-lg px-3 py-1.5 bg-white hover:bg-slate-50"
@@ -983,6 +1029,7 @@ export default function AdminPortal() {
                           <th className="px-4 py-3 font-semibold" title="Gemini-scored tier. Use the dropdown to override.">Lead Score</th>
                           <th className="px-4 py-3 font-semibold" title="Zoom registration status after OTP verify">Zoom</th>
                           <th className="px-4 py-3 font-semibold" title="Pulled from Zoom Reports API">Attended</th>
+                          <th className="px-4 py-3 font-semibold" title="Total watch time on the webinar (summed across rejoins), from Zoom Reports">Duration</th>
                           <th className="px-4 py-3 font-semibold" title="WhatsApp OTP send result">WA</th>
                           <th className="px-4 py-3 font-semibold">Verified At</th>
                           <th className="px-4 py-3 font-semibold">Actions</th>
@@ -1081,10 +1128,22 @@ export default function AdminPortal() {
                               <td className="px-4 py-3">
                                 {reg.attended === true ? (
                                   <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#00875A] bg-[#00DF83]/10 px-2 py-0.5 rounded-full">
-                                    Attended{typeof reg.attendanceDurationMin === 'number' && reg.attendanceDurationMin > 0 && <span className="font-normal text-slate-500"> · {reg.attendanceDurationMin}m</span>}
+                                    Attended
                                   </span>
                                 ) : reg.attended === false ? (
                                   <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">No-show</span>
+                                ) : (
+                                  <span className="text-slate-300 text-xs">—</span>
+                                )}
+                              </td>
+                              {/* Watch duration */}
+                              <td className="px-4 py-3 whitespace-nowrap">
+                                {typeof reg.attendanceDurationMin === 'number' && reg.attendanceDurationMin > 0 ? (
+                                  <span className="text-xs font-semibold text-[#003368]" title={`${reg.attendanceDurationMin} minutes on the webinar`}>
+                                    {formatWatchDuration(reg.attendanceDurationMin)}
+                                  </span>
+                                ) : reg.attended === true ? (
+                                  <span className="text-slate-400 text-xs">&lt;1m</span>
                                 ) : (
                                   <span className="text-slate-300 text-xs">—</span>
                                 )}

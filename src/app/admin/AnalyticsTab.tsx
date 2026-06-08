@@ -11,6 +11,7 @@ interface Overview {
   funnel: {
     registered: number; reminded: number; attended: number; attendedOfReminded: number;
     remindedAttendRate: number; notRemindedAttendRate: number;
+    avgWatchMin: number; medianWatchMin: number; engagedCount: number; engagedThresholdMin: number;
     byLeadScore: { score: string; total: number; reminded: number; attended: number }[];
   };
   bestTime: { grid: number[][]; max: number; topLabel: string | null };
@@ -170,6 +171,10 @@ export default function AnalyticsTab() {
     insights.push({ tone: "info", text: `Email opens (${email.openRate}%) are currently ahead of WhatsApp reads (${wa.readRate}%).` });
   if (funnel.attended > 0 && funnel.remindedAttendRate - funnel.notRemindedAttendRate > 0)
     insights.push({ tone: "good", text: `Reminded people attended at ${funnel.remindedAttendRate}% vs ${funnel.notRemindedAttendRate}% of those not reached — reminders lifted attendance by ${funnel.remindedAttendRate - funnel.notRemindedAttendRate} points.` });
+  if (funnel.avgWatchMin > 0) {
+    const engagedPct = funnel.attended ? Math.round((funnel.engagedCount / funnel.attended) * 100) : 0;
+    insights.push({ tone: engagedPct >= 50 ? "good" : "info", text: `Attendees watched ${funnel.avgWatchMin} min on average, and ${funnel.engagedCount} of ${funnel.attended} (${engagedPct}%) stayed for at least half the session — a strong signal of who to follow up with first.` });
+  }
   {
     const hot = funnel.byLeadScore.find(s => s.score === "hot");
     const cold = funnel.byLeadScore.find(s => s.score === "cold");
@@ -308,6 +313,25 @@ export default function AnalyticsTab() {
             </div>
           ) : (
             <p className="mt-3 text-[11px] text-amber-600">Attendance shows after you run “Sync Attendance from Zoom” on the Registrations tab.</p>
+          )}
+          {funnel.avgWatchMin > 0 && (
+            <div className="mt-4 pt-4 border-t border-slate-100">
+              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Watch time</p>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <div className="text-2xl font-bold text-[#003368] tabular-nums">{funnel.avgWatchMin}<span className="text-sm font-semibold text-slate-400"> min</span></div>
+                  <div className="text-[11px] text-slate-500">Avg watch time</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold text-[#003368] tabular-nums">{funnel.medianWatchMin}<span className="text-sm font-semibold text-slate-400"> min</span></div>
+                  <div className="text-[11px] text-slate-500">Median watch time</div>
+                </div>
+                <div title={`Attendees who watched at least ${funnel.engagedThresholdMin} min (~50% of the typical session)`}>
+                  <div className="text-2xl font-bold text-[#00875A] tabular-nums">{funnel.engagedCount}<span className="text-sm font-semibold text-slate-400"> / {funnel.attended}</span></div>
+                  <div className="text-[11px] text-slate-500">Engaged (≥{funnel.engagedThresholdMin} min)</div>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       )}

@@ -18,14 +18,16 @@ export async function GET(request: Request) {
   const pageSize = parseInt(url.searchParams.get('pageSize') ?? '50', 10) || 50;
   const wantStats = url.searchParams.get('stats') === '1';
   const scoreFilter = url.searchParams.get('score') || null;
+  const attendedFilter = url.searchParams.get('attended') || null;
+  const statusFilter = url.searchParams.get('regStatus') || null;
   // Collapse a person's repeat attempts into one row by default; pass
   // unique=0 to see every raw submission.
   const unique = url.searchParams.get('unique') !== '0';
 
   const [pageRes, stats] = await Promise.all([
     unique
-      ? getUniqueRegistrationsPaginated(page, pageSize, null, scoreFilter)
-      : getRegistrationsPaginated(page, pageSize, null, scoreFilter),
+      ? getUniqueRegistrationsPaginated(page, pageSize, null, scoreFilter, attendedFilter, statusFilter)
+      : getRegistrationsPaginated(page, pageSize, null, scoreFilter, attendedFilter, statusFilter),
     wantStats ? getRegistrationStats() : Promise.resolve(null),
   ]);
 

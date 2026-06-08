@@ -968,6 +968,8 @@ export async function getRegistrationsPaginated(
   pageSize: number = 50,
   sessionId?: string | null,
   scoreFilter?: string | null,
+  attendedFilter?: string | null,
+  statusFilter?: string | null,
 ): Promise<RegistrationsPage> {
   const safePage = Math.max(1, Math.floor(page));
   const safeSize = Math.max(1, Math.min(200, Math.floor(pageSize)));
@@ -983,6 +985,12 @@ export async function getRegistrationsPaginated(
       query = query.eq('status', 'Verified').is('lead_score', null);
     } else if (scoreFilter && ['hot', 'warm', 'cold', 'junk'].includes(scoreFilter)) {
       query = query.eq('lead_score', scoreFilter);
+    }
+    if (attendedFilter === 'attended') query = query.eq('attended', true);
+    else if (attendedFilter === 'noshow') query = query.eq('attended', false);
+    else if (attendedFilter === 'pending') query = query.is('attended', null);
+    if (statusFilter === 'Verified' || statusFilter === 'Unverified') {
+      query = query.eq('status', statusFilter);
     }
     const { data, error, count } = await query.range(from, to);
     if (error) throw error;
@@ -1012,6 +1020,8 @@ export async function getUniqueRegistrationsPaginated(
   pageSize: number = 50,
   sessionId?: string | null,
   scoreFilter?: string | null,
+  attendedFilter?: string | null,
+  statusFilter?: string | null,
 ): Promise<RegistrationsPage> {
   const safePage = Math.max(1, Math.floor(page));
   const safeSize = Math.max(1, Math.min(200, Math.floor(pageSize)));
@@ -1048,6 +1058,14 @@ export async function getUniqueRegistrationsPaginated(
       keepers = keepers.filter(r => r.status === 'Verified' && (r.leadScore == null));
     } else if (scoreFilter && ['hot', 'warm', 'cold', 'junk'].includes(scoreFilter)) {
       keepers = keepers.filter(r => r.leadScore === scoreFilter);
+    }
+
+    // Attendance + OTP-status filters (mirror the SQL path).
+    if (attendedFilter === 'attended') keepers = keepers.filter(r => r.attended === true);
+    else if (attendedFilter === 'noshow') keepers = keepers.filter(r => r.attended === false);
+    else if (attendedFilter === 'pending') keepers = keepers.filter(r => r.attended == null);
+    if (statusFilter === 'Verified' || statusFilter === 'Unverified') {
+      keepers = keepers.filter(r => r.status === statusFilter);
     }
 
     // Newest-first by the keeper's created date.
@@ -2906,6 +2924,10 @@ export interface AnalyticsOverview {
     attendedOfReminded: number;
     remindedAttendRate: number;      // attended & reminded / reminded
     notRemindedAttendRate: number;   // attended & not-reminded / not-reminded
+    avgWatchMin: number;             // mean watch time across attendees (min)
+    medianWatchMin: number;          // median watch time (min)
+    engagedCount: number;            // attendees who watched >= engagedThresholdMin
+    engagedThresholdMin: number;     // ~50% of the typical (p90) watch length
     byLeadScore: { score: string; total: number; reminded: number; attended: number }[];
   };
   // Engagement (WA reads + email opens) by IST day-of-week × hour, for a heatmap.
@@ -2969,23 +2991,25 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
     .select('email');
   const emailReached = new Set((emailRecips ?? []).map(r => (r.email as string || '').toLowerCase().trim()));
   // Registrants, deduped by email.
-  const { data: regs } = await supabase.from('registrations').select('email, phone, lead_score, attended').limit(20000);
-  const regMap = new Map<string, { phone: string; leadScore: string | null; attended: boolean }>();
+  const { data: regs } = await supabase.from('registrations').select('email, phone, lead_score, attended, attendance_duration_min').limit(20000);
+  const regMap = new Map<string, { phone: string; leadScore: string | null; attended: boolean; durationMin: number }>();
   for (const r of regs ?? []) {
     const email = (r.email as string || '').toLowerCase().trim();
     if (!email) continue;
     const attended = r.attended === true;
     const leadScore = (r.lead_score as string | null) ?? null;
+    const durationMin = typeof r.attendance_duration_min === 'number' ? r.attendance_duration_min : 0;
     const cur = regMap.get(email);
-    if (!cur) regMap.set(email, { phone: r.phone as string, leadScore, attended });
-    else { if (attended) cur.attended = true; if (!cur.leadScore && leadScore) cur.leadScore = leadScore; }
+    if (!cur) regMap.set(email, { phone: r.phone as string, leadScore, attended, durationMin });
+    else { if (attended) cur.attended = true; if (!cur.leadScore && leadScore) cur.leadScore = leadScore; if (durationMin > cur.durationMin) cur.durationMin = durationMin; }
   }
   let reminded = 0, attended = 0, attendedReminded = 0;
   const scoreMap = new Map<string, { total: number; reminded: number; attended: number }>();
+  const watchMins: number[] = []; // per attendee, for avg/median/engagement
   for (const [email, p] of regMap) {
     const isReminded = emailReached.has(email) || (!!p.phone && waReached.has(last10(p.phone)));
     if (isReminded) reminded++;
-    if (p.attended) attended++;
+    if (p.attended) { attended++; if (p.durationMin > 0) watchMins.push(p.durationMin); }
     if (isReminded && p.attended) attendedReminded++;
     const key = p.leadScore || 'unscored';
     const sm = scoreMap.get(key) ?? { total: 0, reminded: 0, attended: 0 };
@@ -2998,6 +3022,17 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
   const byLeadScore = ['hot', 'warm', 'cold', 'junk', 'unscored']
     .map(s => ({ score: s, ...(scoreMap.get(s) ?? { total: 0, reminded: 0, attended: 0 }) }))
     .filter(x => x.total > 0);
+
+  // ── Watch-time engagement among attendees ──
+  // Reference webinar length = 90th-percentile watch time (robust to brief
+  // drop-ins and the few summed-rejoin outliers that exceed the real length).
+  // "Engaged" = watched at least half of that reference.
+  const sortedMins = [...watchMins].sort((a, b) => a - b);
+  const avgWatchMin = sortedMins.length ? Math.round(sortedMins.reduce((a, b) => a + b, 0) / sortedMins.length) : 0;
+  const medianWatchMin = sortedMins.length ? sortedMins[Math.floor((sortedMins.length - 1) / 2)] : 0;
+  const p90 = sortedMins.length ? sortedMins[Math.min(sortedMins.length - 1, Math.floor(sortedMins.length * 0.9))] : 0;
+  const engagedThresholdMin = Math.max(1, Math.round(p90 * 0.5));
+  const engagedCount = sortedMins.filter(m => m >= engagedThresholdMin).length;
 
   // ── Best time to send: engagement events (WA reads + email opens) by IST hour/day ──
   const { data: emailOpens } = await supabase
@@ -3058,6 +3093,10 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
       attendedOfReminded: attendedReminded,
       remindedAttendRate: pctI(attendedReminded, reminded),
       notRemindedAttendRate: pctI(attendedNotReminded, notReminded),
+      avgWatchMin,
+      medianWatchMin,
+      engagedCount,
+      engagedThresholdMin,
       byLeadScore,
     },
     bestTime: { grid, max: gMax, topLabel },

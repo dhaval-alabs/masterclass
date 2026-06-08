@@ -23,6 +23,8 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const scoreFilter = searchParams.get('score') ?? undefined;
   const sessionId = searchParams.get('sessionId') ?? undefined;
+  const attendedFilter = searchParams.get('attended') ?? undefined;
+  const statusFilter = searchParams.get('regStatus') ?? undefined;
 
   try {
     // getRegistrationsPaginated clamps pageSize to 200, so paginate through all pages
@@ -30,7 +32,7 @@ export async function GET(req: NextRequest) {
     const allData: Awaited<ReturnType<typeof getRegistrationsPaginated>>['data'] = [];
     let page = 1;
     while (true) {
-      const result = await getRegistrationsPaginated(page, PAGE_SIZE, sessionId, scoreFilter);
+      const result = await getRegistrationsPaginated(page, PAGE_SIZE, sessionId, scoreFilter, attendedFilter, statusFilter);
       allData.push(...result.data);
       if (allData.length >= result.total || result.data.length < PAGE_SIZE) break;
       page++;
@@ -47,6 +49,7 @@ export async function GET(req: NextRequest) {
       'Lead Score',
       'Verified At',
       'Attended',
+      'Watch Duration (min)',
       'WA Send',
       'Zoom Registered',
       'Zoom Join URL',
@@ -65,6 +68,7 @@ export async function GET(req: NextRequest) {
         reg.leadScore ?? '',
         reg.verifiedAt ?? '',
         reg.attended != null ? String(reg.attended) : '',
+        typeof reg.attendanceDurationMin === 'number' ? String(reg.attendanceDurationMin) : '',
         reg.whatsappStatus ?? '',
         reg.zoomRegistered != null ? String(reg.zoomRegistered) : '',
         reg.zoomJoinUrl ?? '',
