@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, LogOut, UploadCloud, Plus, Trash2, ArrowUp, ArrowDown, Settings, Video, Star, ListOrdered, HelpCircle, Layers, Users, UserCog, Mail, MessageSquare, BarChart3 } from "lucide-react";
+import { Loader2, LogOut, UploadCloud, Plus, Trash2, ArrowUp, ArrowDown, Settings, Video, Star, ListOrdered, HelpCircle, Layers, Users, UserCog, Mail, MessageSquare, BarChart3, Send } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import TeamTab from "./TeamTab";
@@ -9,6 +9,7 @@ import SessionsTab from "./SessionsTab";
 import EmailTab from "./EmailTab";
 import WhatsAppTab from "./WhatsAppTab";
 import AnalyticsTab from "./AnalyticsTab";
+import BroadcastTab from "./BroadcastTab";
 
 type FaqItem = { id: string; q: string; a: string; order: number };
 type FeatureItem = { id: string; icon: string | null; title: string; description: string; accent: string | null; sortOrder: number };
@@ -74,7 +75,7 @@ type WebinarConfig = {
   genericBrochureUrl: string | null; genericBrochureCta: string | null;
 };
 
-type AdminTab = 'settings' | 'webinar' | 'features' | 'agenda' | 'registrations' | 'faqs' | 'team' | 'sessions' | 'email' | 'whatsapp' | 'analytics';
+type AdminTab = 'settings' | 'webinar' | 'features' | 'agenda' | 'registrations' | 'faqs' | 'team' | 'sessions' | 'email' | 'whatsapp' | 'broadcast' | 'analytics';
 
 // Formats total webinar watch time (minutes) as "53m" or "1h 3m".
 function formatWatchDuration(min: number): string {
@@ -670,6 +671,7 @@ export default function AdminPortal() {
     { key: 'registrations', label: 'Registrations',  icon: <Users         className="w-4 h-4" /> },
     { key: 'email',         label: 'Emails',         icon: <Mail          className="w-4 h-4" /> },
     { key: 'whatsapp',      label: 'WhatsApp',       icon: <MessageSquare className="w-4 h-4" /> },
+    { key: 'broadcast',     label: 'Broadcast',      icon: <Send          className="w-4 h-4" /> },
     { key: 'analytics',     label: 'Analytics',      icon: <BarChart3     className="w-4 h-4" /> },
     { key: 'team',          label: 'Team',           icon: <UserCog       className="w-4 h-4" /> },
   ];
@@ -1860,6 +1862,7 @@ export default function AdminPortal() {
           {/* Email Tab */}
           {activeTab === "email" && <EmailTab />}
           {activeTab === "whatsapp" && <WhatsAppTab />}
+          {activeTab === "broadcast" && <BroadcastTab />}
           {activeTab === "analytics" && <AnalyticsTab />}
 
         </div>
