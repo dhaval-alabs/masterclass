@@ -1219,6 +1219,12 @@ export async function getWebinarConfig(): Promise<WebinarConfig> {
     activeSessionId: session.id,
     activeSessionCode: session.code,
     activeSessionMetaEventSuffix: session.metaEventSuffix,
+    // Per-session speaker overrides (set when the session came from a speaker
+    // submission) — activating that session swaps the live speaker on the LP.
+    speakerName: session.speakerName ?? base.speakerName,
+    speakerTitle: session.speakerTitle ?? base.speakerTitle,
+    speakerImage: session.speakerImage ?? base.speakerImage,
+    speakerBio: session.speakerBio ?? base.speakerBio,
     // Per-session overrides (only override if session has a non-null value;
     // otherwise keep the settings-table fallback).
     webinarTitle: session.title || base.webinarTitle,
@@ -1633,6 +1639,12 @@ export interface WebinarSession {
   whatsappTemplateName: string | null;
   lsqSourceName: string | null;
   metaEventSuffix: string | null;
+  // Per-session speaker profile (set when created from a speaker submission).
+  // When the session is active, these override the global settings speaker row.
+  speakerName: string | null;
+  speakerTitle: string | null;
+  speakerImage: string | null;
+  speakerBio: string | null;
   status: WebinarSessionStatus;
   createdAt: string;
   activatedAt: string | null;
@@ -1653,6 +1665,10 @@ type WebinarSessionRow = {
   whatsapp_template_name: string | null;
   lsq_source_name: string | null;
   meta_event_suffix: string | null;
+  speaker_name: string | null;
+  speaker_title: string | null;
+  speaker_image: string | null;
+  speaker_bio: string | null;
   status: WebinarSessionStatus;
   created_at: string;
   activated_at: string | null;
@@ -1674,6 +1690,10 @@ function mapSession(row: WebinarSessionRow): WebinarSession {
     whatsappTemplateName: row.whatsapp_template_name,
     lsqSourceName: row.lsq_source_name,
     metaEventSuffix: row.meta_event_suffix,
+    speakerName: row.speaker_name ?? null,
+    speakerTitle: row.speaker_title ?? null,
+    speakerImage: row.speaker_image ?? null,
+    speakerBio: row.speaker_bio ?? null,
     status: row.status,
     createdAt: row.created_at,
     activatedAt: row.activated_at,
@@ -1729,6 +1749,10 @@ export async function createWebinarSession(input: {
   whatsappTemplateName?: string | null;
   lsqSourceName?: string | null;
   metaEventSuffix?: string | null;
+  speakerName?: string | null;
+  speakerTitle?: string | null;
+  speakerImage?: string | null;
+  speakerBio?: string | null;
 }): Promise<WebinarSession> {
   const { data, error } = await client()
     .from('webinar_sessions')
@@ -1745,6 +1769,10 @@ export async function createWebinarSession(input: {
       // Default the Meta event suffix to the session code if not provided —
       // matches the user's preference for suffixed event names.
       meta_event_suffix: input.metaEventSuffix ?? input.code,
+      speaker_name: input.speakerName ?? null,
+      speaker_title: input.speakerTitle ?? null,
+      speaker_image: input.speakerImage ?? null,
+      speaker_bio: input.speakerBio ?? null,
       status: 'upcoming',
     })
     .select('*')
@@ -1802,6 +1830,10 @@ export async function updateWebinarSession(
     whatsappTemplateName: string | null;
     lsqSourceName: string | null;
     metaEventSuffix: string | null;
+    speakerName: string | null;
+    speakerTitle: string | null;
+    speakerImage: string | null;
+    speakerBio: string | null;
   }>,
 ): Promise<WebinarSession> {
   const dbPatch: Record<string, unknown> = {};
@@ -1814,6 +1846,10 @@ export async function updateWebinarSession(
   if (patch.whatsappTemplateName !== undefined) dbPatch.whatsapp_template_name = patch.whatsappTemplateName;
   if (patch.lsqSourceName !== undefined) dbPatch.lsq_source_name = patch.lsqSourceName;
   if (patch.metaEventSuffix !== undefined) dbPatch.meta_event_suffix = patch.metaEventSuffix;
+  if (patch.speakerName !== undefined) dbPatch.speaker_name = patch.speakerName;
+  if (patch.speakerTitle !== undefined) dbPatch.speaker_title = patch.speakerTitle;
+  if (patch.speakerImage !== undefined) dbPatch.speaker_image = patch.speakerImage;
+  if (patch.speakerBio !== undefined) dbPatch.speaker_bio = patch.speakerBio;
 
   const { data, error } = await client()
     .from('webinar_sessions')
@@ -1823,6 +1859,142 @@ export async function updateWebinarSession(
     .single<WebinarSessionRow>();
   if (error) throw error;
   return mapSession(data);
+}
+
+// Generates the next sequential session code (W001, W002, …) from existing codes.
+export async function generateNextSessionCode(): Promise<string> {
+  const sessions = await listWebinarSessions();
+  let max = 0;
+  for (const s of sessions) {
+    const m = /^W0*(\d+)$/i.exec(s.code.trim());
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return `W${String(max + 1).padStart(3, '0')}`;
+}
+
+// ── Speaker submissions ("next speaker" intake form) ───────────────────────
+
+export type SpeakerSubmissionStatus = 'pending' | 'approved' | 'rejected';
+
+export interface SpeakerSubmission {
+  id: string;
+  status: SpeakerSubmissionStatus;
+  speakerName: string;
+  speakerTitle: string | null;
+  speakerImage: string | null;
+  speakerBio: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
+  linkedinUrl: string | null;
+  notes: string | null;
+  sessionId: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+}
+
+type SpeakerSubmissionRow = {
+  id: string;
+  status: SpeakerSubmissionStatus;
+  speaker_name: string;
+  speaker_title: string | null;
+  speaker_image: string | null;
+  speaker_bio: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  linkedin_url: string | null;
+  notes: string | null;
+  session_id: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+};
+
+function mapSpeakerSubmission(row: SpeakerSubmissionRow): SpeakerSubmission {
+  return {
+    id: row.id,
+    status: row.status,
+    speakerName: row.speaker_name,
+    speakerTitle: row.speaker_title,
+    speakerImage: row.speaker_image,
+    speakerBio: row.speaker_bio,
+    contactEmail: row.contact_email,
+    contactPhone: row.contact_phone,
+    linkedinUrl: row.linkedin_url,
+    notes: row.notes,
+    sessionId: row.session_id,
+    reviewedBy: row.reviewed_by,
+    reviewedAt: row.reviewed_at,
+    createdAt: row.created_at,
+  };
+}
+
+export async function createSpeakerSubmission(input: {
+  speakerName: string;
+  speakerTitle?: string | null;
+  speakerImage?: string | null;
+  speakerBio?: string | null;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+  linkedinUrl?: string | null;
+  notes?: string | null;
+}): Promise<SpeakerSubmission> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('speaker_submissions')
+    .insert({
+      speaker_name:  input.speakerName,
+      speaker_title: input.speakerTitle ?? null,
+      speaker_image: input.speakerImage ?? null,
+      speaker_bio:   input.speakerBio ?? null,
+      contact_email: input.contactEmail ?? null,
+      contact_phone: input.contactPhone ?? null,
+      linkedin_url:  input.linkedinUrl ?? null,
+      notes:         input.notes ?? null,
+      status:        'pending',
+    })
+    .select('*')
+    .single<SpeakerSubmissionRow>();
+  if (error) throw error;
+  return mapSpeakerSubmission(data);
+}
+
+export async function listSpeakerSubmissions(): Promise<SpeakerSubmission[]> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('speaker_submissions')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data as SpeakerSubmissionRow[]).map(mapSpeakerSubmission);
+}
+
+export async function getSpeakerSubmissionById(id: string): Promise<SpeakerSubmission | null> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('speaker_submissions')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle<SpeakerSubmissionRow>();
+  if (error) throw error;
+  return data ? mapSpeakerSubmission(data) : null;
+}
+
+export async function updateSpeakerSubmission(
+  id: string,
+  patch: Partial<{ status: SpeakerSubmissionStatus; sessionId: string | null; reviewedBy: string | null; reviewedAt: string | null }>,
+): Promise<void> {
+  const dbPatch: Record<string, unknown> = {};
+  if (patch.status !== undefined)     dbPatch.status      = patch.status;
+  if (patch.sessionId !== undefined)  dbPatch.session_id  = patch.sessionId;
+  if (patch.reviewedBy !== undefined) dbPatch.reviewed_by = patch.reviewedBy;
+  if (patch.reviewedAt !== undefined) dbPatch.reviewed_at = patch.reviewedAt;
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('speaker_submissions')
+    .update(dbPatch)
+    .eq('id', id);
+  if (error) throw error;
 }
 
 // ── Zoom attendance sync helpers ───────────────────────────────────────────

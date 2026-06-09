@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, LogOut, UploadCloud, Plus, Trash2, ArrowUp, ArrowDown, Settings, Video, Star, ListOrdered, HelpCircle, Layers, Users, UserCog, Mail, MessageSquare, BarChart3, Send } from "lucide-react";
+import { Loader2, LogOut, UploadCloud, Plus, Trash2, ArrowUp, ArrowDown, Settings, Video, Star, ListOrdered, HelpCircle, Layers, Users, UserCog, Mail, MessageSquare, BarChart3, Send, Mic } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import TeamTab from "./TeamTab";
@@ -10,6 +10,7 @@ import EmailTab from "./EmailTab";
 import WhatsAppTab from "./WhatsAppTab";
 import AnalyticsTab from "./AnalyticsTab";
 import BroadcastTab from "./BroadcastTab";
+import SpeakerSubmissionsTab from "./SpeakerSubmissionsTab";
 
 type FaqItem = { id: string; q: string; a: string; order: number };
 type FeatureItem = { id: string; icon: string | null; title: string; description: string; accent: string | null; sortOrder: number };
@@ -75,7 +76,7 @@ type WebinarConfig = {
   genericBrochureUrl: string | null; genericBrochureCta: string | null;
 };
 
-type AdminTab = 'settings' | 'webinar' | 'features' | 'agenda' | 'registrations' | 'faqs' | 'team' | 'sessions' | 'email' | 'whatsapp' | 'broadcast' | 'analytics';
+type AdminTab = 'settings' | 'webinar' | 'features' | 'agenda' | 'registrations' | 'faqs' | 'team' | 'sessions' | 'speakers' | 'email' | 'whatsapp' | 'broadcast' | 'analytics';
 
 // Formats total webinar watch time (minutes) as "53m" or "1h 3m".
 function formatWatchDuration(min: number): string {
@@ -668,6 +669,7 @@ export default function AdminPortal() {
     { key: 'agenda',        label: 'Agenda',         icon: <ListOrdered   className="w-4 h-4" /> },
     { key: 'faqs',          label: 'FAQs',           icon: <HelpCircle    className="w-4 h-4" /> },
     { key: 'sessions',      label: 'Sessions',       icon: <Layers        className="w-4 h-4" /> },
+    { key: 'speakers',      label: 'Next Speaker',   icon: <Mic           className="w-4 h-4" /> },
     { key: 'registrations', label: 'Registrations',  icon: <Users         className="w-4 h-4" /> },
     { key: 'email',         label: 'Emails',         icon: <Mail          className="w-4 h-4" /> },
     { key: 'whatsapp',      label: 'WhatsApp',       icon: <MessageSquare className="w-4 h-4" /> },
@@ -1858,6 +1860,7 @@ export default function AdminPortal() {
 
           {/* Sessions Tab */}
           {activeTab === "sessions" && <SessionsTab />}
+          {activeTab === "speakers" && <SpeakerSubmissionsTab />}
 
           {/* Email Tab */}
           {activeTab === "email" && <EmailTab />}
