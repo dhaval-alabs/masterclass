@@ -5,6 +5,20 @@ import { Loader2, Plus, X, Check, Square, Power } from "lucide-react";
 
 type SessionStatus = "upcoming" | "active" | "completed";
 
+// Converts a datetime-local value (entered as IST wall-clock) into the UTC ISO
+// string the countdown needs, plus human date/time labels in IST. The admin
+// just picks "21 June 2026, 7:00 PM" and we compute 2026-06-21T13:30:00Z etc.
+function fromIstPicker(local: string): { iso: string; dateLabel: string; timeLabel: string } {
+  if (!local) return { iso: "", dateLabel: "", timeLabel: "" };
+  const d = new Date(`${local}:00+05:30`); // interpret the picked time as IST
+  if (isNaN(d.getTime())) return { iso: "", dateLabel: "", timeLabel: "" };
+  const ist = (opts: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat("en-GB", { ...opts, timeZone: "Asia/Kolkata" }).format(d);
+  const dateLabel = `${ist({ weekday: "short" })}, ${ist({ day: "numeric" })} ${ist({ month: "long" })} ${ist({ year: "numeric" })}`;
+  const timeLabel = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" }).format(d) + " IST";
+  return { iso: d.toISOString(), dateLabel, timeLabel };
+}
+
 type WebinarSession = {
   id: string;
   code: string;
@@ -65,6 +79,7 @@ export default function SessionsTab() {
   // Create form
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [istPicker, setIstPicker] = useState(""); // datetime-local value (IST)
   const [form, setForm] = useState({
     code: "",
     title: "",
@@ -114,6 +129,7 @@ export default function SessionsTab() {
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
       setShowCreate(false);
+      setIstPicker("");
       setForm({
         code: "",
         title: "",
@@ -304,9 +320,23 @@ export default function SessionsTab() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-semibold mb-1 text-slate-600 uppercase tracking-wide">Datetime UTC (for countdown)</label>
-                <input value={form.datetimeUtc} onChange={(e) => setForm({ ...form, datetimeUtc: e.target.value })} placeholder="2026-06-13T13:30:00+00:00" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-white" />
-                <p className="text-[10px] text-slate-400 mt-1">ISO 8601. Used by the LP countdown timer.</p>
+                <label className="block text-xs font-semibold mb-1 text-slate-600 uppercase tracking-wide">Webinar date &amp; time (IST)</label>
+                <input
+                  type="datetime-local"
+                  value={istPicker}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setIstPicker(v);
+                    const { iso, dateLabel, timeLabel } = fromIstPicker(v);
+                    // Auto-fill the UTC countdown value + the display labels.
+                    setForm((f) => ({ ...f, datetimeUtc: iso, dateLabel: dateLabel || f.dateLabel, timeLabel: timeLabel || f.timeLabel }));
+                  }}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Just pick the date &amp; time in IST. We auto-fill the date/time labels and the countdown.
+                  {form.datetimeUtc && <> Countdown (UTC): <span className="font-mono text-slate-500">{form.datetimeUtc}</span></>}
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
