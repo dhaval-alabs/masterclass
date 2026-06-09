@@ -660,6 +660,27 @@ export default function AdminPortal() {
     }
   };
 
+  // Uploads an image and stores its URL into a webinar-config field (e.g. the
+  // "What You'll Master" hero image). Save changes after to persist.
+  const [uploadingField, setUploadingField] = useState<string | null>(null);
+  const handleWebinarImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, field: keyof WebinarConfig) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingField(field as string);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (res.ok && data.url) updateWebinarField(field, data.url as WebinarConfig[typeof field]);
+    } catch {
+      /* surfaced via no-op; user can retry */
+    } finally {
+      setUploadingField(null);
+      e.target.value = '';
+    }
+  };
+
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' });
     router.push('/admin/login');
@@ -1569,7 +1590,24 @@ export default function AdminPortal() {
                   <WebinarSection title="Features Section">
                     <Field label="Section title (use *xxx* for green emphasis)" value={webinar.featuresSectionTitle ?? ''} onChange={v => updateWebinarField('featuresSectionTitle', v)} placeholder="What You'll *Master*" />
                     <TextField label="Section subtitle" value={webinar.featuresSectionSubtitle ?? ''} onChange={v => updateWebinarField('featuresSectionSubtitle', v)} rows={2} />
-                    <Field label="Hero image path" value={webinar.featuresImagePath ?? ''} onChange={v => updateWebinarField('featuresImagePath', v)} placeholder="/brand/landingpageelement.png" />
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Hero image (the &quot;What You&apos;ll Master&quot; visual)</label>
+                      <div className="flex items-start gap-3">
+                        {webinar.featuresImagePath && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={webinar.featuresImagePath} alt="Hero preview" className="w-28 h-20 object-contain rounded-lg border border-slate-200 bg-slate-50 shrink-0" />
+                        )}
+                        <div className="flex-1 space-y-2">
+                          <label className={`cursor-pointer inline-flex items-center justify-center gap-2 border border-slate-300 rounded-lg px-4 py-2 text-sm transition-colors ${uploadingField === 'featuresImagePath' ? 'bg-slate-100 text-slate-400' : 'bg-white hover:bg-slate-50 text-slate-700'}`}>
+                            {uploadingField === 'featuresImagePath' ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+                            {uploadingField === 'featuresImagePath' ? 'Uploading…' : 'Upload image'}
+                            <input type="file" accept="image/*" className="hidden" disabled={uploadingField === 'featuresImagePath'} onChange={e => handleWebinarImageUpload(e, 'featuresImagePath')} />
+                          </label>
+                          <input className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" value={webinar.featuresImagePath ?? ''} onChange={e => updateWebinarField('featuresImagePath', e.target.value)} placeholder="/brand/landingpageelement.png or https://…" />
+                          <p className="text-[11px] text-slate-400">Upload a new image (or paste a URL), then <b>Save changes</b> to publish it on the landing page.</p>
+                        </div>
+                      </div>
+                    </div>
                   </WebinarSection>
 
                   <WebinarSection title="Agenda Section (Inside the Session)">
