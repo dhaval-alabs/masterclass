@@ -1604,6 +1604,9 @@ export default function AdminPortal() {
                             <input type="file" accept="image/*" className="hidden" disabled={uploadingField === 'featuresImagePath'} onChange={e => handleWebinarImageUpload(e, 'featuresImagePath')} />
                           </label>
                           <input className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" value={webinar.featuresImagePath ?? ''} onChange={e => updateWebinarField('featuresImagePath', e.target.value)} placeholder="/brand/landingpageelement.png or https://…" />
+                          <p className="text-[11px] text-slate-400">
+                            Recommended: <b>1200 × 800 px (3:2 landscape)</b> — or 1600 × 1066 for sharper retina. PNG or JPG, light/transparent background, under ~1&nbsp;MB. The image scales to fit the card (it won&apos;t be cropped).
+                          </p>
                           <p className="text-[11px] text-slate-400">Upload a new image (or paste a URL), then <b>Save changes</b> to publish it on the landing page.</p>
                         </div>
                       </div>

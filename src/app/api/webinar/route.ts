@@ -34,6 +34,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true, config: updated });
   } catch (error) {
     console.error('[Webinar POST] error:', error);
-    return NextResponse.json({ success: false, error: 'Failed to update webinar config' }, { status: 500 });
+    // Surface the real cause (admin-only endpoint) so failures are diagnosable
+    // instead of an opaque 500.
+    const detail = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ success: false, error: `Failed to update webinar config: ${detail}` }, { status: 500 });
   }
 }
