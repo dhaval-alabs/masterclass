@@ -6,6 +6,7 @@ import {
   addUnverifiedRegistration,
   getAutoSendCampaign,
   scheduleEmailForRecipient,
+  scheduleWhatsAppForRecipient,
 } from '@/lib/db';
 
 function requireEnv(name: string): string {
@@ -157,6 +158,15 @@ export async function POST(req: NextRequest) {
           delayUnit:      campaign.delayUnit,
         });
       }).catch(err => console.error('[auto-send] unverified queue failed:', err));
+
+      // WhatsApp auto-send: nudge people who don't complete OTP (fired later by
+      // the cron; cancelled automatically if they verify in the meantime).
+      scheduleWhatsAppForRecipient({
+        trigger: 'unverified',
+        registrationId: registrationId,
+        phone: phone,
+        recipientName: fullName,
+      }).catch((err: unknown) => console.error('[wa auto-send] unverified queue failed:', err));
     } catch (regErr) {
       console.error('[Capture] Failed to insert unverified row:', regErr);
     }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import fs from 'fs';
-import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation } from '@/lib/db';
+import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation, scheduleWhatsAppForRecipient, cancelPendingScheduledWhatsApp } from '@/lib/db';
 import { registerWebinarParticipant } from '@/lib/zoom';
 import { scoreAndSave, type ConversationTurn } from '@/lib/qualify';
 
@@ -170,6 +170,19 @@ export async function POST(req: NextRequest) {
         delayUnit:      campaign.delayUnit,
       });
     }).catch(err => console.error('[auto-send] verified queue failed:', err));
+
+    // WhatsApp auto-send: cancel the pending 'unverified' nudge (they completed
+    // OTP), then queue the 'verified' welcome/join-link.
+    if (registrationId && typeof registrationId === 'string') {
+      cancelPendingScheduledWhatsApp(registrationId, 'unverified')
+        .catch((e: unknown) => console.error('[wa auto-send] cancel nudge failed:', e));
+    }
+    scheduleWhatsAppForRecipient({
+      trigger: 'verified',
+      registrationId: (typeof registrationId === 'string' ? registrationId : null),
+      phone,
+      recipientName: fullName,
+    }).catch((err: unknown) => console.error('[wa auto-send] verified queue failed:', err));
 
     // 6. Generate / echo back the event_id so the browser pixel and Stape
     // use the same id for CompleteRegistration deduplication.

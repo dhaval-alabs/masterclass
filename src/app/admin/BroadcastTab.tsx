@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Loader2, MessageSquare, Mail, Users, ListChecks, Send, Clock, CheckCircle2, AlertCircle, Info, Search, RefreshCw, Plus, Trash2, ExternalLink } from "lucide-react";
+import WhatsAppAutomationsPanel from "./WhatsAppAutomationsPanel";
 
 type Channel = "whatsapp" | "email";
 type TargetMode = "audience" | "recipients";
@@ -514,6 +515,11 @@ export default function BroadcastTab() {
           </div>
         </div>
       )}
+
+      {/* Event-triggered WhatsApp automations */}
+      <div className="pt-2 border-t border-slate-200 mt-2">
+        <WhatsAppAutomationsPanel />
+      </div>
     </div>
   );
 }

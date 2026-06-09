@@ -10,7 +10,11 @@ import {
   markWhatsAppQueueProcessed,
   getWhatsAppCampaignLogCounts,
   getWhatsAppDailySentCount,
+  getDueScheduledWhatsAppSends,
+  markScheduledWhatsAppSend,
+  isRegistrationVerified,
   type WhatsAppCampaign,
+  type ScheduledWhatsAppSend,
 } from './db';
 import { sendWhatsAppCampaign, getBroadcastCreds } from './whatsapp';
 
@@ -214,4 +218,60 @@ export async function fireWhatsAppCampaign(campaign: WhatsAppCampaign): Promise<
     totalRecipients: recipients.length,
     message: r.message,
   };
+}
+
+/**
+ * Processes due WhatsApp auto-sends (the event-triggered automations). Groups
+ * pending due rows by their auto-send config campaign and sends each batch via
+ * the same send path as regular campaigns (so opt-outs, daily cap, and the
+ * per-recipient log all apply). For the 'unverified' nudge, skips anyone who
+ * has since verified. Called by the WhatsApp queue cron each tick.
+ */
+export async function drainWhatsAppAutoSends(maxItems = 150): Promise<{ sent: number; skipped: number; failed: number }> {
+  let sent = 0, skipped = 0, failed = 0;
+  const due = await getDueScheduledWhatsAppSends(maxItems);
+  if (due.length === 0) return { sent, skipped, failed };
+
+  const byCampaign = new Map<string, ScheduledWhatsAppSend[]>();
+  for (const d of due) {
+    const g = byCampaign.get(d.campaignId) ?? [];
+    g.push(d);
+    byCampaign.set(d.campaignId, g);
+  }
+
+  for (const [campaignId, group] of byCampaign) {
+    const campaign = await getWhatsAppCampaignById(campaignId);
+    if (!campaign) {
+      for (const d of group) { await markScheduledWhatsAppSend(d.id, 'failed', 'Auto-send config not found'); failed++; }
+      continue;
+    }
+
+    // Drop 'unverified' nudges for people who completed OTP after enqueue.
+    const toSend: ScheduledWhatsAppSend[] = [];
+    for (const d of group) {
+      if (d.trigger === 'unverified' && d.registrationId && (await isRegistrationVerified(d.registrationId))) {
+        await markScheduledWhatsAppSend(d.id, 'skipped');
+        skipped++;
+      } else {
+        toSend.push(d);
+      }
+    }
+    if (toSend.length === 0) continue;
+
+    try {
+      await sendWhatsAppCampaign({
+        campaignId: campaign.id,
+        templateName: campaign.templateName,
+        languageCode: campaign.languageCode,
+        variables: campaign.variables,
+        recipients: toSend.map(d => ({ phone: d.phone, fullName: d.recipientName })),
+        headerImageUrl: campaign.headerImageUrl,
+      });
+      for (const d of toSend) { await markScheduledWhatsAppSend(d.id, 'sent'); sent++; }
+    } catch (err) {
+      for (const d of toSend) { await markScheduledWhatsAppSend(d.id, 'failed', String(err)); failed++; }
+    }
+  }
+
+  return { sent, skipped, failed };
 }

@@ -2793,6 +2793,12 @@ export interface WhatsAppCampaign {
   sentAt: string | null;
   // When set (and status === 'scheduled'), the cron fires this campaign at/after this time.
   scheduledFor: string | null;
+  // Auto-send (event-triggered automation). When enabled, this campaign acts as
+  // the template/config for a trigger rather than a one-off bulk send.
+  autoSendEnabled: boolean;
+  autoSendTrigger: 'unverified' | 'verified' | 'noshow' | null;
+  delayValue: number;
+  delayUnit: 'minutes' | 'hours' | 'days';
 }
 
 function mapWhatsAppCampaign(r: Record<string, unknown>): WhatsAppCampaign {
@@ -2812,6 +2818,10 @@ function mapWhatsAppCampaign(r: Record<string, unknown>): WhatsAppCampaign {
     createdAt:        r.created_at as string,
     sentAt:           (r.sent_at as string | null) ?? null,
     scheduledFor:     (r.scheduled_for as string | null) ?? null,
+    autoSendEnabled:  (r.auto_send_enabled as boolean) ?? false,
+    autoSendTrigger:  (r.auto_send_trigger as WhatsAppCampaign['autoSendTrigger']) ?? null,
+    delayValue:       (r.delay_value as number) ?? 15,
+    delayUnit:        (r.delay_unit as WhatsAppCampaign['delayUnit']) ?? 'minutes',
   };
 }
 
@@ -2825,6 +2835,10 @@ export async function createWhatsAppCampaign(params: {
   totalRecipients: number;
   status?: WhatsAppCampaign['status'];
   scheduledFor?: string | null;
+  autoSendEnabled?: boolean;
+  autoSendTrigger?: 'unverified' | 'verified' | 'noshow' | null;
+  delayValue?: number;
+  delayUnit?: 'minutes' | 'hours' | 'days';
 }): Promise<WhatsAppCampaign> {
   const { data, error } = await client()
     .schema('excel_to_ai')
@@ -2839,6 +2853,10 @@ export async function createWhatsAppCampaign(params: {
       total_recipients: params.totalRecipients,
       status:           params.status ?? 'draft',
       scheduled_for:    params.scheduledFor ?? null,
+      auto_send_enabled: params.autoSendEnabled ?? false,
+      auto_send_trigger: params.autoSendTrigger ?? null,
+      delay_value:       params.delayValue ?? 15,
+      delay_unit:        params.delayUnit ?? 'minutes',
     })
     .select()
     .single();
@@ -2890,6 +2908,143 @@ export async function getWhatsAppCampaignById(id: string): Promise<WhatsAppCampa
   if (error) throw error;
   if (!data) return null;
   return mapWhatsAppCampaign(data as Record<string, unknown>);
+}
+
+// ── WhatsApp auto-send (event-triggered automations) ───────────────────────
+
+export type WhatsAppTrigger = 'unverified' | 'verified' | 'noshow';
+
+// The active config campaign for a trigger (most recent enabled one).
+export async function getAutoSendWhatsAppCampaign(trigger: WhatsAppTrigger): Promise<WhatsAppCampaign | null> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_campaigns')
+    .select('*')
+    .eq('auto_send_enabled', true)
+    .eq('auto_send_trigger', trigger)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return mapWhatsAppCampaign(data as Record<string, unknown>);
+}
+
+// Current automation config per trigger, for the admin UI.
+export async function listWhatsAppAutomations(): Promise<Record<WhatsAppTrigger, WhatsAppCampaign | null>> {
+  const [unverified, verified, noshow] = await Promise.all([
+    getAutoSendWhatsAppCampaign('unverified'),
+    getAutoSendWhatsAppCampaign('verified'),
+    getAutoSendWhatsAppCampaign('noshow'),
+  ]);
+  return { unverified, verified, noshow };
+}
+
+// Disable any existing config(s) for a trigger (called before saving a new one
+// so only one stays active).
+export async function disableWhatsAppAutomations(trigger: WhatsAppTrigger): Promise<void> {
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_campaigns')
+    .update({ auto_send_enabled: false })
+    .eq('auto_send_trigger', trigger)
+    .eq('auto_send_enabled', true);
+  if (error) throw error;
+}
+
+function delayToMs(value: number, unit: 'minutes' | 'hours' | 'days'): number {
+  const mult = unit === 'days' ? 86_400_000 : unit === 'hours' ? 3_600_000 : 60_000;
+  return Math.max(0, value) * mult;
+}
+
+// Enqueue a per-recipient scheduled send for a trigger (no-op if no config).
+export async function scheduleWhatsAppForRecipient(params: {
+  trigger: WhatsAppTrigger;
+  registrationId: string | null;
+  phone: string;
+  recipientName: string;
+}): Promise<boolean> {
+  if (!params.phone?.trim()) return false;
+  const campaign = await getAutoSendWhatsAppCampaign(params.trigger);
+  if (!campaign) return false;
+  const sendAfter = new Date(Date.now() + delayToMs(campaign.delayValue, campaign.delayUnit)).toISOString();
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_scheduled_sends')
+    .insert({
+      campaign_id:     campaign.id,
+      registration_id: params.registrationId,
+      phone:           params.phone.trim(),
+      recipient_name:  params.recipientName ?? '',
+      trigger:         params.trigger,
+      send_after:      sendAfter,
+      status:          'pending',
+    });
+  if (error) throw error;
+  return true;
+}
+
+export interface ScheduledWhatsAppSend {
+  id: string;
+  campaignId: string;
+  registrationId: string | null;
+  phone: string;
+  recipientName: string;
+  trigger: WhatsAppTrigger;
+}
+
+export async function getDueScheduledWhatsAppSends(limit = 200): Promise<ScheduledWhatsAppSend[]> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_scheduled_sends')
+    .select('id, campaign_id, registration_id, phone, recipient_name, trigger')
+    .eq('status', 'pending')
+    .lte('send_after', new Date().toISOString())
+    .order('send_after', { ascending: true })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []).map(r => ({
+    id: r.id as string,
+    campaignId: r.campaign_id as string,
+    registrationId: (r.registration_id as string | null) ?? null,
+    phone: r.phone as string,
+    recipientName: (r.recipient_name as string) ?? '',
+    trigger: r.trigger as WhatsAppTrigger,
+  }));
+}
+
+export async function markScheduledWhatsAppSend(id: string, status: 'sent' | 'skipped' | 'failed', error?: string): Promise<void> {
+  const { error: e } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_scheduled_sends')
+    .update({ status, error: error ?? null, processed_at: new Date().toISOString() })
+    .eq('id', id);
+  if (e) throw e;
+}
+
+// Cancel a person's pending nudge(s) for a trigger — e.g. they verified before
+// the 'unverified' nudge fired, so we shouldn't pester them.
+export async function cancelPendingScheduledWhatsApp(registrationId: string, trigger: WhatsAppTrigger): Promise<void> {
+  if (!registrationId) return;
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_scheduled_sends')
+    .update({ status: 'cancelled', processed_at: new Date().toISOString() })
+    .eq('registration_id', registrationId)
+    .eq('trigger', trigger)
+    .eq('status', 'pending');
+  if (error) throw error;
+}
+
+// Is this registration currently Verified? (used by the cron to skip the
+// unverified nudge for people who completed OTP after enqueue.)
+export async function isRegistrationVerified(registrationId: string): Promise<boolean> {
+  if (!registrationId) return false;
+  const { data } = await client()
+    .from('registrations')
+    .select('status')
+    .eq('id', registrationId)
+    .maybeSingle<{ status: string }>();
+  return data?.status === 'Verified';
 }
 
 /** Scheduled campaigns whose fire time has passed — picked up by the cron. */

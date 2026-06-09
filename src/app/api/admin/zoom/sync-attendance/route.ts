@@ -22,6 +22,7 @@ import {
   getLatestAttendanceSyncRun,
   getActiveWebinarSession,
   getWebinarSessionById,
+  scheduleWhatsAppForRecipient,
 } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 import { assertSameOrigin } from '@/lib/security';
@@ -140,6 +141,9 @@ export async function POST(request: Request) {
         if (reg.attended !== false) {
           try {
             await updateRegistrationAttendance({ id: reg.id, attended: false });
+            // First time marking this person a no-show → queue the follow-up WA.
+            scheduleWhatsAppForRecipient({ trigger: 'noshow', registrationId: reg.id, phone: reg.phone, recipientName: reg.fullName })
+              .catch((e: unknown) => console.error('[wa auto-send] noshow queue failed:', e));
           } catch (err) {
             errors.push(`[no-show update ${reg.email}] ${err instanceof Error ? err.message : err}`);
           }

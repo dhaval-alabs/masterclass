@@ -1,7 +1,7 @@
 export const maxDuration = 300;
 import { NextRequest, NextResponse } from 'next/server';
 import { getDueScheduledWhatsAppCampaigns, getCampaignIdsWithPendingQueue } from '@/lib/db';
-import { fireWhatsAppCampaign, drainWhatsAppCampaignQueue } from '@/lib/whatsapp-campaign';
+import { fireWhatsAppCampaign, drainWhatsAppCampaignQueue, drainWhatsAppAutoSends } from '@/lib/whatsapp-campaign';
 
 // POST /api/cron/process-whatsapp-queue
 // Called by Vercel Cron every 5 minutes. Two passes:
@@ -51,7 +51,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ scheduledFired, queuesDrained, sent, stillQueued, pendingCampaigns: pendingIds.length });
+    // 3. Process due event-triggered auto-sends (unverified nudge, verified
+    //    welcome, no-show follow-up). Reuses the same send path + daily cap.
+    let autoSends = { sent: 0, skipped: 0, failed: 0 };
+    if (Date.now() - startedAt < DEADLINE_MS) {
+      try {
+        autoSends = await drainWhatsAppAutoSends();
+      } catch (err) {
+        console.error('[cron] whatsapp auto-sends failed:', err);
+      }
+    }
+
+    return NextResponse.json({ scheduledFired, queuesDrained, sent, stillQueued, pendingCampaigns: pendingIds.length, autoSends });
   } catch (err) {
     console.error('[cron] process-whatsapp-queue error:', err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
