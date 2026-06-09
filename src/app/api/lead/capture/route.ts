@@ -182,7 +182,10 @@ export async function POST(req: NextRequest) {
       { Attribute: 'mx_GCLID',     Value: body.gclid || '' },
       // Meta click id for CRM→Meta event matching. Prefer the formatted _fbc
       // cookie (what Meta CAPI expects); fall back to the raw fbclid param.
-      { Attribute: 'mx_FBCLID',    Value: body.fbc || body.fbclid || '' },
+      // Field name is env-configurable because LSQ derives the schema name from
+      // the display name on save (usually mx_FBCLID) — set LSQ_FBCLID_FIELD if
+      // it generated something else.
+      { Attribute: process.env.LSQ_FBCLID_FIELD || 'mx_FBCLID', Value: body.fbc || body.fbclid || '' },
       { Attribute: 'mx_OTP_Status', Value: 'Unverified' },
       { Attribute: notesFieldName, Value: notesLines.join('\n') },
     ];
