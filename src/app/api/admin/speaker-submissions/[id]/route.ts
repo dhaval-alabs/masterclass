@@ -34,10 +34,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ success: true, status: 'rejected' });
   }
 
-  if (body.action === 'approve') {
-    if (submission.status === 'approved' && submission.sessionId) {
-      return NextResponse.json({ error: 'Already approved.', sessionId: submission.sessionId }, { status: 409 });
-    }
+  // 'approve' (first review) and 'reuse' (repurpose a stored speaker) both create
+  // a fresh upcoming session from the speaker's saved profile — repeatable, so a
+  // speaker who's submitted once can be scheduled again and again without resending
+  // the form. The submission row is kept permanently as the speaker's record.
+  if (body.action === 'approve' || body.action === 'reuse') {
     try {
       const code = await generateNextSessionCode();
       const session = await createWebinarSession({
@@ -54,11 +55,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         reviewedBy: admin.sub,
         reviewedAt: new Date().toISOString(),
       });
-      return NextResponse.json({ success: true, status: 'approved', session });
+      return NextResponse.json({ success: true, status: 'approved', session, reused: body.action === 'reuse' });
     } catch (err) {
       return NextResponse.json({ error: String(err) }, { status: 500 });
     }
   }
 
-  return NextResponse.json({ error: 'Unknown action. Use "approve" or "reject".' }, { status: 400 });
+  return NextResponse.json({ error: 'Unknown action. Use "approve", "reuse", or "reject".' }, { status: 400 });
 }

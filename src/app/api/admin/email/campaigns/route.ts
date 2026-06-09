@@ -13,7 +13,9 @@ export const dynamic = 'force-dynamic';
 // GET /api/admin/email/campaigns — list all campaigns
 export async function GET() {
   try {
-    const campaigns = await listEmailCampaigns();
+    // Scope history to the active cohort so multiple masterclasses don't mix.
+    const session = await getActiveWebinarSession();
+    const campaigns = await listEmailCampaigns(session?.id ?? null);
     return NextResponse.json({ campaigns });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

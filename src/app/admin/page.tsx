@@ -113,6 +113,8 @@ export default function AdminPortal() {
   // Collapse a person's repeat attempts into one row (default on).
   const [regUnique, setRegUnique] = useState(true);
   const [regStats, setRegStats] = useState<{ total: number; verified: number; unverified: number; uniqueEmailsStarted: number; uniqueEmailsVerified: number; hot: number; warm: number; cold: number; junk: number; unscored: number } | null>(null);
+  const [regScope, setRegScope] = useState<{ allSessions: boolean; sessionCode: string | null; sessionTitle: string | null } | null>(null);
+  const [regAllSessions, setRegAllSessions] = useState(false);
 
   // Chat transcript modal
   const [transcriptModal, setTranscriptModal] = useState<{ name: string; conversation: Array<{ role: string; content: string }> } | null>(null);
@@ -184,17 +186,19 @@ export default function AdminPortal() {
     fetch('/api/settings').then(res => res.json()).then(data => setSettings(data));
   }, []);
 
-  const loadRegistrations = (page = regPage, pageSize = regPageSize, scoreFilter = regScoreFilter, unique = regUnique, attendedFilter = regAttendedFilter, statusFilter = regStatusFilter) => {
+  const loadRegistrations = (page = regPage, pageSize = regPageSize, scoreFilter = regScoreFilter, unique = regUnique, attendedFilter = regAttendedFilter, statusFilter = regStatusFilter, allSessions = regAllSessions) => {
     setIsLoadingRegs(true);
     const scoreParam = scoreFilter ? `&score=${encodeURIComponent(scoreFilter)}` : '';
     const attendedParam = attendedFilter ? `&attended=${encodeURIComponent(attendedFilter)}` : '';
     const statusParam = statusFilter ? `&regStatus=${encodeURIComponent(statusFilter)}` : '';
-    fetch(`/api/register?page=${page}&pageSize=${pageSize}&stats=1&unique=${unique ? 1 : 0}${scoreParam}${attendedParam}${statusParam}`)
+    const allSessionsParam = allSessions ? `&allSessions=1` : '';
+    fetch(`/api/register?page=${page}&pageSize=${pageSize}&stats=1&unique=${unique ? 1 : 0}${scoreParam}${attendedParam}${statusParam}${allSessionsParam}`)
       .then(res => res.json())
-      .then((res: { data: any[]; total: number; stats?: typeof regStats }) => {
+      .then((res: { data: any[]; total: number; stats?: typeof regStats; scope?: typeof regScope }) => {
         setRegistrations(Array.isArray(res?.data) ? res.data : []);
         setRegTotal(typeof res?.total === 'number' ? res.total : 0);
         if (res?.stats) setRegStats(res.stats);
+        if (res?.scope) setRegScope(res.scope);
         setIsLoadingRegs(false);
       })
       .catch(() => setIsLoadingRegs(false));
@@ -794,6 +798,24 @@ export default function AdminPortal() {
           {/* Registrations Tab */}
           {activeTab === "registrations" && (
             <div>
+              {regScope?.allSessions && (
+                <div className="mb-4 flex items-center justify-between gap-2 text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-200 rounded-lg px-3 py-2">
+                  <span className="flex items-center gap-2"><Layers className="w-3.5 h-3.5" /> Showing <span className="font-bold">all sessions</span> combined (every cohort).</span>
+                  <button onClick={() => { setRegAllSessions(false); setRegPage(1); loadRegistrations(1, regPageSize, regScoreFilter, regUnique, regAttendedFilter, regStatusFilter, false); }} className="underline hover:text-[#003368]">Show active cohort only</button>
+                </div>
+              )}
+              {regScope && !regScope.allSessions && regScope.sessionCode && (
+                <div className="mb-4 flex items-center justify-between gap-2 text-xs font-semibold text-[#003368] bg-[#00DF83]/10 border border-[#00DF83]/30 rounded-lg px-3 py-2">
+                  <span className="flex items-center gap-2"><Layers className="w-3.5 h-3.5" /> Showing the active cohort: <span className="font-bold">{regScope.sessionTitle || regScope.sessionCode}</span> ({regScope.sessionCode}). Registrations, stats, campaigns &amp; analytics are scoped to this session.</span>
+                  <button onClick={() => { setRegAllSessions(true); setRegPage(1); loadRegistrations(1, regPageSize, regScoreFilter, regUnique, regAttendedFilter, regStatusFilter, true); }} className="underline hover:opacity-70 shrink-0">View all sessions</button>
+                </div>
+              )}
+              {regScope && !regScope.allSessions && !regScope.sessionCode && (
+                <div className="mb-4 flex items-center gap-2 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <Layers className="w-3.5 h-3.5" />
+                  No active session — showing all registrations. Activate a session in the Sessions tab to scope by cohort.
+                </div>
+              )}
               <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
                 <h2 className="text-lg font-bold text-[#003368]">Student Registrations</h2>
                 <div className="flex items-center gap-3">

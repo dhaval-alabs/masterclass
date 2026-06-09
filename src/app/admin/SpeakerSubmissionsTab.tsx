@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, Copy, Check, ExternalLink, CheckCircle2, XCircle, Clock, User, Mail, Phone, Link2 } from "lucide-react";
+import { Loader2, Copy, Check, ExternalLink, CheckCircle2, XCircle, Clock, User, Mail, Phone, Link2, CalendarPlus } from "lucide-react";
 
 interface SpeakerSubmission {
   id: string;
@@ -53,7 +53,7 @@ export default function SpeakerSubmissionsTab() {
     try { await navigator.clipboard.writeText(formUrl); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* ignore */ }
   }
 
-  async function act(id: string, action: "approve" | "reject") {
+  async function act(id: string, action: "approve" | "reject" | "reuse") {
     setActioningId(id);
     setMsg(null);
     try {
@@ -64,9 +64,9 @@ export default function SpeakerSubmissionsTab() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
-      setMsg({ kind: "ok", text: action === "approve"
-        ? `Approved — created upcoming session "${data.session?.code}". Set its date & activate it in the Sessions tab.`
-        : "Submission rejected." });
+      setMsg({ kind: "ok", text: action === "reject"
+        ? "Submission rejected."
+        : `Created upcoming session "${data.session?.code}" for this speaker. Set its date & activate it in the Sessions tab.` });
       load();
     } catch (err) {
       setMsg({ kind: "err", text: err instanceof Error ? err.message : "Action failed." });
@@ -76,7 +76,8 @@ export default function SpeakerSubmissionsTab() {
   }
 
   const pending = submissions.filter(s => s.status === "pending");
-  const reviewed = submissions.filter(s => s.status !== "pending");
+  const library = submissions.filter(s => s.status === "approved");
+  const rejected = submissions.filter(s => s.status === "rejected");
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -116,10 +117,17 @@ export default function SpeakerSubmissionsTab() {
               <div className="space-y-3">{pending.map(s => <Card key={s.id} s={s} onAct={act} busy={actioningId === s.id} />)}</div>
             </div>
           )}
-          {reviewed.length > 0 && (
+          {library.length > 0 && (
             <div>
-              <h3 className="text-sm font-bold text-slate-400 mb-3 mt-2">Reviewed ({reviewed.length})</h3>
-              <div className="space-y-3">{reviewed.map(s => <Card key={s.id} s={s} onAct={act} busy={actioningId === s.id} />)}</div>
+              <h3 className="text-sm font-bold text-[#003368] mb-1">Speaker library ({library.length})</h3>
+              <p className="text-[11px] text-slate-400 mb-3">Saved speakers — schedule any of them for a new masterclass anytime, no form needed.</p>
+              <div className="space-y-3">{library.map(s => <Card key={s.id} s={s} onAct={act} busy={actioningId === s.id} />)}</div>
+            </div>
+          )}
+          {rejected.length > 0 && (
+            <div>
+              <h3 className="text-sm font-bold text-slate-400 mb-3 mt-2">Rejected ({rejected.length})</h3>
+              <div className="space-y-3">{rejected.map(s => <Card key={s.id} s={s} onAct={act} busy={actioningId === s.id} />)}</div>
             </div>
           )}
         </>
@@ -128,7 +136,7 @@ export default function SpeakerSubmissionsTab() {
   );
 }
 
-function Card({ s, onAct, busy }: { s: SpeakerSubmission; onAct: (id: string, a: "approve" | "reject") => void; busy: boolean }) {
+function Card({ s, onAct, busy }: { s: SpeakerSubmission; onAct: (id: string, a: "approve" | "reject" | "reuse") => void; busy: boolean }) {
   const meta = STATUS_META[s.status];
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-4">
@@ -163,6 +171,20 @@ function Card({ s, onAct, busy }: { s: SpeakerSubmission; onAct: (id: string, a:
             </button>
             <button onClick={() => onAct(s.id, "reject")} disabled={busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-500 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60">
               <XCircle className="w-3.5 h-3.5" /> Reject
+            </button>
+          </div>
+        )}
+        {s.status === "approved" && (
+          <div className="flex flex-col gap-2 shrink-0">
+            <button onClick={() => onAct(s.id, "reuse")} disabled={busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#003368] text-white text-sm font-bold hover:bg-[#002347] disabled:opacity-60" title="Create a new upcoming session from this speaker's saved details">
+              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CalendarPlus className="w-3.5 h-3.5" />} Schedule a session
+            </button>
+          </div>
+        )}
+        {s.status === "rejected" && (
+          <div className="flex flex-col gap-2 shrink-0">
+            <button onClick={() => onAct(s.id, "approve")} disabled={busy} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-500 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60" title="Move back into the speaker library and create a session">
+              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />} Restore
             </button>
           </div>
         )}

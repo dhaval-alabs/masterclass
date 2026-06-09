@@ -207,7 +207,7 @@ export default function AnalyticsTab() {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h2 className="text-lg font-bold text-[#003368]">Analytics</h2>
-          <p className="text-sm text-slate-500 mt-0.5">How your Email &amp; WhatsApp reminders are performing.</p>
+          <p className="text-sm text-slate-500 mt-0.5">How your Email &amp; WhatsApp reminders are performing — scoped to the active cohort.</p>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-[11px] text-slate-400">{lastRefreshed ? `Updated ${lastRefreshed.toLocaleTimeString()}` : ""}</span>

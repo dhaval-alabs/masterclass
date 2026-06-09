@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { addRegistration, getRegistrationsPaginated, getUniqueRegistrationsPaginated, getRegistrationStats } from '@/lib/db';
+import { addRegistration, getRegistrationsPaginated, getUniqueRegistrationsPaginated, getRegistrationStats, getActiveWebinarSession } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 
 async function requireAdmin(): Promise<boolean> {
@@ -24,16 +24,27 @@ export async function GET(request: Request) {
   // unique=0 to see every raw submission.
   const unique = url.searchParams.get('unique') !== '0';
 
+  // Scope to the active cohort so multiple masterclasses don't mix. Passing
+  // allSessions=1 (admin escape hatch) shows everyone across every session.
+  const allSessions = url.searchParams.get('allSessions') === '1';
+  const activeSession = allSessions ? null : await getActiveWebinarSession();
+  const scopeSessionId = activeSession?.id ?? null;
+
   const [pageRes, stats] = await Promise.all([
     unique
-      ? getUniqueRegistrationsPaginated(page, pageSize, null, scoreFilter, attendedFilter, statusFilter)
-      : getRegistrationsPaginated(page, pageSize, null, scoreFilter, attendedFilter, statusFilter),
-    wantStats ? getRegistrationStats() : Promise.resolve(null),
+      ? getUniqueRegistrationsPaginated(page, pageSize, scopeSessionId, scoreFilter, attendedFilter, statusFilter)
+      : getRegistrationsPaginated(page, pageSize, scopeSessionId, scoreFilter, attendedFilter, statusFilter),
+    wantStats ? getRegistrationStats(scopeSessionId) : Promise.resolve(null),
   ]);
 
   return NextResponse.json({
     ...pageRes,
     ...(stats ? { stats } : {}),
+    scope: {
+      allSessions,
+      sessionCode: activeSession?.code ?? null,
+      sessionTitle: activeSession?.title ?? null,
+    },
   });
 }
 

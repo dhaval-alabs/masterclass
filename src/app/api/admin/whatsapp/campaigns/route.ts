@@ -11,7 +11,9 @@ import { startCampaignSend } from '@/lib/whatsapp-campaign';
 
 export async function GET() {
   try {
-    const campaigns = await listWhatsAppCampaigns();
+    // Scope history to the active cohort so multiple masterclasses don't mix.
+    const session = await getActiveWebinarSession();
+    const campaigns = await listWhatsAppCampaigns(session?.id ?? null);
     return NextResponse.json({ campaigns });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

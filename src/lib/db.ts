@@ -2867,13 +2867,15 @@ export async function updateWhatsAppCampaign(
   if (error) throw error;
 }
 
-export async function listWhatsAppCampaigns(): Promise<WhatsAppCampaign[]> {
-  const { data, error } = await client()
+export async function listWhatsAppCampaigns(sessionId?: string | null): Promise<WhatsAppCampaign[]> {
+  let q = client()
     .schema('excel_to_ai')
     .from('whatsapp_campaigns')
     .select('*')
     .order('created_at', { ascending: false })
     .limit(50);
+  if (sessionId) q = q.eq('session_id', sessionId);
+  const { data, error } = await q;
   if (error) throw error;
   return (data ?? []).map(r => mapWhatsAppCampaign(r as Record<string, unknown>));
 }
@@ -3120,12 +3122,12 @@ export interface AnalyticsOverview {
   bestTime: { grid: number[][]; max: number; topLabel: string | null };
 }
 
-export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
+export async function getAnalyticsOverview(sessionId?: string | null): Promise<AnalyticsOverview> {
   const supabase = client();
   const pctI = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
 
-  // Email — sum the per-campaign counters.
-  const emailCamps = await listEmailCampaigns();
+  // Email — sum the per-campaign counters (scoped to the cohort if given).
+  const emailCamps = await listEmailCampaigns(sessionId);
   const e = emailCamps.reduce(
     (a, c) => ({
       recipients: a.recipients + c.totalRecipients,
@@ -3138,17 +3140,27 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
   );
 
   // WhatsApp — stored counters for sent/failed/recipients.
-  const waCamps = await listWhatsAppCampaigns();
+  const waCamps = await listWhatsAppCampaigns(sessionId);
   const waStored = waCamps.reduce(
     (a, c) => ({ recipients: a.recipients + c.totalRecipients, sent: a.sent + c.sentCount, failed: a.failed + c.failedCount }),
     { recipients: 0, sent: 0, failed: 0 },
   );
 
+  // Campaign-id sets for this cohort — used to scope the send log / recipients.
+  const waCampIds = waCamps.map(c => c.id);
+  const emailCampIds = emailCamps.map(c => c.id);
+
   // WhatsApp delivered/read — dedup the send log per (campaign, phone), best status.
-  const { data: waLog } = await supabase
-    .schema('excel_to_ai')
-    .from('whatsapp_send_log')
-    .select('campaign_id, phone, status, read_at');
+  // When scoped to a cohort, only that cohort's campaigns' logs are counted.
+  let waLog: { campaign_id?: string; phone?: string; status?: string; read_at?: string | null }[] = [];
+  if (!sessionId || waCampIds.length) {
+    let waLogQ = supabase
+      .schema('excel_to_ai')
+      .from('whatsapp_send_log')
+      .select('campaign_id, phone, status, read_at');
+    if (sessionId) waLogQ = waLogQ.in('campaign_id', waCampIds);
+    waLog = (await waLogQ).data ?? [];
+  }
   const rank: Record<string, number> = { read: 4, delivered: 3, sent: 2, failed: 1, skipped: 0 };
   const best = new Map<string, string>();
   for (const r of waLog ?? []) {
@@ -3170,14 +3182,21 @@ export async function getAnalyticsOverview(): Promise<AnalyticsOverview> {
   for (const r of waLog ?? []) {
     if (['sent', 'delivered', 'read'].includes(r.status as string)) waReached.add(last10(r.phone as string));
   }
-  // Emails reached (recorded recipients).
-  const { data: emailRecips } = await supabase
-    .schema('excel_to_ai')
-    .from('email_campaign_recipients')
-    .select('email');
+  // Emails reached (recorded recipients) — scoped to the cohort's campaigns.
+  let emailRecips: { email?: string }[] = [];
+  if (!sessionId || emailCampIds.length) {
+    let recipQ = supabase
+      .schema('excel_to_ai')
+      .from('email_campaign_recipients')
+      .select('email, campaign_id');
+    if (sessionId) recipQ = recipQ.in('campaign_id', emailCampIds);
+    emailRecips = (await recipQ).data ?? [];
+  }
   const emailReached = new Set((emailRecips ?? []).map(r => (r.email as string || '').toLowerCase().trim()));
-  // Registrants, deduped by email.
-  const { data: regs } = await supabase.from('registrations').select('email, phone, lead_score, attended, attendance_duration_min').limit(20000);
+  // Registrants for this cohort, deduped by email.
+  let regsQ = supabase.from('registrations').select('email, phone, lead_score, attended, attendance_duration_min').limit(20000);
+  if (sessionId) regsQ = regsQ.eq('session_id', sessionId);
+  const { data: regs } = await regsQ;
   const regMap = new Map<string, { phone: string; leadScore: string | null; attended: boolean; durationMin: number }>();
   for (const r of regs ?? []) {
     const email = (r.email as string || '').toLowerCase().trim();
