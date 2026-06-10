@@ -49,10 +49,10 @@ export async function GET(req: NextRequest) {
 
   // ── 2. Gemini health ──────────────────────────────────────────────────────
   const mockConversation = [
-    { role: 'assistant' as const, content: 'Quick one — currently working or studying?' },
-    { role: 'user' as const, content: 'Working full-time as a software engineer' },
-    { role: 'assistant' as const, content: "What's pulling you toward data and AI right now?" },
-    { role: 'user' as const, content: 'I want to switch to a data scientist role within 2 months' },
+    { role: 'assistant' as const, content: 'Quick one — where are you right now?' },
+    { role: 'user' as const, content: 'Early-career professional, working as a software engineer' },
+    { role: 'assistant' as const, content: "What's your main goal right now?" },
+    { role: 'user' as const, content: 'Switch into a data career — data scientist role within 2 months' },
     { role: 'assistant' as const, content: 'When are you looking to upskill?' },
     { role: 'user' as const, content: 'Within 1-2 months, very soon' },
   ];

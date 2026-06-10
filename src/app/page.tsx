@@ -624,7 +624,7 @@ export default async function MasterclassLandingPage() {
         </div>
       </footer>
 
-      <StickyCta desktopEyebrow={stickyEyebrow} desktopMain={stickyMain} />
+      <StickyCta desktopEyebrow={stickyEyebrow} desktopMain={stickyMain} mobileEyebrow={stickyEyebrow} />
     </div>
   );
 }

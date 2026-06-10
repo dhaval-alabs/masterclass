@@ -19,16 +19,18 @@ interface QualificationChatProps {
 }
 
 const QUESTIONS: string[] = [
-  'Quick one — currently working or studying?',
-  "What's pulling you toward data and AI right now?",
+  'Quick one — where are you right now?',
+  "What's your main goal right now?",
   'When are you looking to upskill — next few months, or still exploring?',
   'Bangalore, Gurugram, or Noida?',
   "Last thing — the masterclass details and a reminder will come straight to your WhatsApp. Shall I lock in your spot?",
 ];
 
+// Q1 options intentionally mirror the form's Status dropdown so the chat
+// answer and the form answer score on the same rules.
 const QUESTION_OPTIONS: readonly string[][] = [
-  ['Working full-time', 'Working part-time', 'Studying', 'Between jobs'],
-  ['Switch to data career', 'Upskill / get promoted', 'Business analytics', 'Just curious'],
+  ['Final-year student', 'Recent graduate (0–1 yr)', 'Early-career professional', 'Other'],
+  ['Land my first data analyst job', 'Build skills alongside college', 'Switch into a data career', 'Just exploring'],
   ['Within 1–2 months', '3–4 months', '5–6 months', 'Still exploring'],
   ['Bangalore', 'Gurugram', 'Noida', 'Online mode'],
   ["Yes, lock me in!", 'I have a question first', 'Not right now'],

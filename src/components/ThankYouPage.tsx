@@ -49,6 +49,7 @@ export interface ThankYouCopy {
   footerText?: string | null;                 // supports {YEAR}
   brochureUrl?: string | null;
   brochureCta?: string | null;
+  logoPath?: string | null;
 }
 
 interface ThankYouProps {
@@ -94,6 +95,9 @@ export default function ThankYouPage({ heading: headingProp, subCopy: subCopyPro
   const footerText             = (copy.footerText ?? '© {YEAR} AnalytixLabs. All rights reserved. | NASSCOM-FutureSkills Prime Accredited.').replace('{YEAR}', String(footerYear));
   const brochurePdfUrl         = copy.brochureUrl          ?? FALLBACK_BROCHURE_PDF_URL;
   const brochureGenericCta     = copy.brochureCta          ?? 'Download File now';
+  // Local asset (same as the LP header) — the old careersuccess.analytixlabs.co.in
+  // URL went down (HTTP 522) and silently broke the logo.
+  const logoPath               = copy.logoPath             ?? '/brand/ALabs_Masterclass.svg';
   const searchParams = useSearchParams();
   const rawEmail = searchParams.get('email') || '';
   const rawName = searchParams.get('name') || '';
@@ -148,7 +152,7 @@ export default function ThankYouPage({ heading: headingProp, subCopy: subCopyPro
       <header style={{ padding: '32px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '24px', justifyContent: 'center' }}>
           <Image
-            src="https://careersuccess.analytixlabs.co.in/wp-content/uploads/2025/03/analytixlabs-logo.webp"
+            src={logoPath}
             alt="AnalytixLabs"
             width={180}
             height={40}

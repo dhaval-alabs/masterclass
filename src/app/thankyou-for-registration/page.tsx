@@ -29,6 +29,7 @@ export default async function Page() {
     footerText: config.thankyouFooterText,
     brochureUrl: config.genericBrochureUrl,
     brochureCta: config.genericBrochureCta,
+    logoPath: config.logoPath,
   };
 
   return (

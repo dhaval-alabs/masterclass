@@ -1515,7 +1515,7 @@ export default function AdminPortal() {
                   </WebinarSection>
 
                   <WebinarSection title="Sticky Bottom CTA">
-                    <Field label="Eyebrow (desktop)" value={webinar.stickyEyebrow ?? ''} onChange={v => updateWebinarField('stickyEyebrow', v)} placeholder="Sat, 6 June 2026 · 7:00 PM IST · Live Online" />
+                    <Field label="Eyebrow (desktop & mobile)" value={webinar.stickyEyebrow ?? ''} onChange={v => updateWebinarField('stickyEyebrow', v)} placeholder="Sat, 6 June 2026 · 7:00 PM IST · Live Online" hint="Shown above the CTA on both the desktop bar and the mobile bottom bar. Keep it short so it fits on small screens." />
                     <TextField label="Main text" value={webinar.stickyMain ?? ''} onChange={v => updateWebinarField('stickyMain', v)} rows={2} />
                   </WebinarSection>
 

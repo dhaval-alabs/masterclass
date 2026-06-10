@@ -44,10 +44,10 @@ Tiers:
 
 score must be one of: hot warm cold junk (lowercase).`;
 
-const TEST_TRANSCRIPT = `Counsellor: Quick one — working or studying?
-Prospect: working full time in IT.
-Counsellor: What's pulling you toward data and AI?
-Prospect: want to switch to ML engineer role.`;
+const TEST_TRANSCRIPT = `Counsellor: Quick one — where are you right now?
+Prospect: Early-career professional in IT.
+Counsellor: What's your main goal right now?
+Prospect: Switch into a data career as an ML engineer.`;
 
 async function requireAdmin(): Promise<boolean> {
   const token = (await cookies()).get('admin_session')?.value;
