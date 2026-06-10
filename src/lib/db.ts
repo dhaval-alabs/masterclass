@@ -2390,10 +2390,10 @@ export async function getEmailRecipients(
   }
 
   if (sessionId) {
-    // Include rows that belong to this session OR have no session assigned
-    // (registrations created before the session feature was added have session_id = NULL
-    // but conceptually belong to the first/current session).
-    q = q.or(`session_id.eq.${sessionId},session_id.is.null`);
+    // Strictly scoped to the session — matches the Registrations tab so the
+    // recipient count and the registrations count never disagree. (Legacy
+    // NULL-session rows were backfilled to their original session.)
+    q = q.eq('session_id', sessionId);
   }
 
   const { data, error } = await q;

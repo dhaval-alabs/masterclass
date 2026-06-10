@@ -1204,7 +1204,7 @@ export default function EmailTab() {
                   unique addresses{preview.sessionCode && <span className="ml-1 font-semibold text-[#003368]">· {preview.sessionCode}</span>}
                 </div>
                 <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
-                  Active session · includes early registrations with no session assigned.
+                  Scoped to the active session — matches the Registrations tab.
                 </p>
                 {preview.samples.length > 0 && (
                   <div className="mt-4 space-y-2">
