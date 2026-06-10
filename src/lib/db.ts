@@ -671,6 +671,29 @@ export async function updateSettings(newSettings: Partial<SpeakerSettings>): Pro
       speaker_bio: merged.speakerBio,
     });
   if (error) throw error;
+
+  // The LP prefers the ACTIVE session's speaker fields over the settings row
+  // (see getWebinarConfig), so Speaker-tab edits must also land on the active
+  // session or they never show on the live page. Best-effort: if the sync
+  // fails (e.g. migration 0026 not applied), the settings save still counts —
+  // in that case the LP reads from settings anyway.
+  try {
+    const session = await getActiveWebinarSession();
+    if (session) {
+      const { error: sessErr } = await client()
+        .from('webinar_sessions')
+        .update({
+          speaker_name: merged.speakerName,
+          speaker_title: merged.speakerTitle,
+          speaker_image: merged.speakerImage,
+          speaker_bio: merged.speakerBio,
+        })
+        .eq('id', session.id);
+      if (sessErr) throw sessErr;
+    }
+  } catch (err) {
+    console.error('[db.updateSettings] active-session speaker sync failed:', err);
+  }
   return merged;
 }
 
@@ -1421,6 +1444,36 @@ export async function updateWebinarConfig(
     .update(dbPatch)
     .eq('id', 'speaker');
   if (error) throw error;
+
+  // The LP prefers the ACTIVE session's per-cohort fields over the settings
+  // row (see getWebinarConfig), so Webinar-tab edits to these fields must also
+  // land on the active session or they never show on the live page. Same
+  // best-effort policy as updateSettings.
+  const SESSION_SYNCED: Array<[keyof typeof patch, string]> = [
+    ['webinarDateLabel', 'date_label'],
+    ['webinarTimeLabel', 'time_label'],
+    ['webinarDatetimeUtc', 'datetime_utc'],
+    ['durationLabel', 'duration_label'],
+    ['zoomWebinarId', 'zoom_webinar_id'],
+  ];
+  const sessionPatch: Record<string, unknown> = {};
+  for (const [key, column] of SESSION_SYNCED) {
+    if (key in patch && patch[key] !== undefined) sessionPatch[column] = patch[key];
+  }
+  if (Object.keys(sessionPatch).length > 0) {
+    try {
+      const session = await getActiveWebinarSession();
+      if (session) {
+        const { error: sessErr } = await client()
+          .from('webinar_sessions')
+          .update(sessionPatch)
+          .eq('id', session.id);
+        if (sessErr) throw sessErr;
+      }
+    } catch (err) {
+      console.error('[db.updateWebinarConfig] active-session sync failed:', err);
+    }
+  }
   return getWebinarConfig();
 }
 

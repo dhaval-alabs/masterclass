@@ -78,7 +78,12 @@ export default async function MasterclassLandingPage() {
   const stat2Label = config.heroStat2Label ?? 'Average Rating';
   const stat3Value = config.heroStat3Value ?? '100%';
   const stat3Label = config.heroStat3Label ?? 'Live Training';
-  const stickyEyebrow = config.stickyEyebrow ?? null;
+  // Auto-built from the webinar date/time labels so it stays in sync when the
+  // admin (or the active session) changes the schedule. A custom value can use
+  // {date} / {time} placeholders; a literal value is shown as-is.
+  const stickyEyebrow = (config.stickyEyebrow || '{date} · {time} · Live Online')
+    .replace('{date}', dateLabel)
+    .replace('{time}', timeLabel);
   const stickyMain = config.stickyMain ?? null;
   const footerYear = new Date().getFullYear();
   const footerText = (config.footerText ?? '© {YEAR} AnalytixLabs India. Global Headquarters: Gurgaon, India.')
