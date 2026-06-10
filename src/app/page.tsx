@@ -426,13 +426,13 @@ export default async function MasterclassLandingPage() {
           </p>
         </div>
 
-        <div className="relative w-full max-w-4xl mx-auto mb-16 rounded-2xl overflow-hidden shadow-xl shadow-[#003368]/5 border border-slate-100 bg-slate-50/50 p-4 md:p-8">
+        <div className="relative w-full max-w-4xl mx-auto mb-16 rounded-2xl overflow-hidden shadow-xl shadow-[#003368]/5 border border-slate-100 bg-slate-50/50">
           <Image
             src={featImagePath}
             alt="AI-Powered Analytics Workflow: From Excel to Dashboard"
             width={1200}
             height={800}
-            className="w-full h-auto object-contain rounded-lg"
+            className="w-full h-auto"
           />
         </div>
 
