@@ -866,6 +866,33 @@ export async function saveConversation(
   if (error) throw error;
 }
 
+/**
+ * Verified registrations that have a saved qualification chat but no lead
+ * score — scoring was interrupted (e.g. the serverless function was frozen
+ * mid-Gemini-call). Consumed by the rescore cron, which retries them.
+ */
+export async function getUnscoredVerifiedRegistrations(
+  limit = 5,
+): Promise<Array<{ id: string; conversation: Array<{ role: string; content: string }> }>> {
+  try {
+    const { data, error } = await client()
+      .from('registrations')
+      .select('id, chat_conversation')
+      .eq('status', 'Verified')
+      .is('lead_score', null)
+      .not('chat_conversation', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return (data ?? [])
+      .filter(r => Array.isArray(r.chat_conversation) && r.chat_conversation.length > 0)
+      .map(r => ({ id: r.id as string, conversation: r.chat_conversation }));
+  } catch (err) {
+    console.error('[db.getUnscoredVerifiedRegistrations]', err);
+    return [];
+  }
+}
+
 export async function updateZoomRegistration(
   id: string,
   registered: boolean,

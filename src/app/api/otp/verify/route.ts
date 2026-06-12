@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import crypto from 'crypto';
 import fs from 'fs';
 import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation, scheduleWhatsAppForRecipient, cancelPendingScheduledWhatsApp } from '@/lib/db';
@@ -109,8 +109,11 @@ export async function POST(req: NextRequest) {
       if (conversation.length > 0) {
         console.log('[verify] firing scoreAndSave for', registrationId);
         debugLog(`[verify] firing scoreAndSave for ${registrationId}`);
-        scoreAndSave({ registrationId, conversation, label: '[verify/qualify]' });
-        // fire-and-forget — don't await, don't block the OTP response
+        // after() keeps the serverless function alive until scoring finishes
+        // without blocking the OTP response. A bare fire-and-forget promise
+        // gets killed when Vercel freezes the lambda after responding, which
+        // intermittently left verified leads unscored.
+        after(() => scoreAndSave({ registrationId, conversation, label: '[verify/qualify]' }));
       } else {
         console.warn('[verify] scoring SKIPPED — empty conversation for', registrationId);
         debugLog(`[verify] scoring SKIPPED — empty conversation for ${registrationId} (client sent no chat turns)`);

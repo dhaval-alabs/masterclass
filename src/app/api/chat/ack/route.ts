@@ -21,6 +21,9 @@ async function callGemini(prompt: string): Promise<string> {
           generationConfig: {
             temperature: 0.7,
             maxOutputTokens: 60,
+            // Without this, the thinking model's hidden reasoning eats the
+            // tiny 60-token budget and the ack comes back empty.
+            thinkingConfig: { thinkingBudget: 0 },
           },
         }),
       },

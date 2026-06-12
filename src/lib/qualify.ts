@@ -56,7 +56,11 @@ async function scoreConversationOnce(
         signal: controller.signal,
         body: JSON.stringify({
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0, maxOutputTokens: 1024 },
+          // thinkingBudget: 0 — gemini-2.5-flash is a thinking model and its
+          // hidden reasoning tokens count against maxOutputTokens. On longer
+          // transcripts thinking could consume the whole budget, returning an
+          // EMPTY response → "No JSON in Gemini response" → lead left unscored.
+          generationConfig: { temperature: 0, maxOutputTokens: 1024, thinkingConfig: { thinkingBudget: 0 } },
         }),
       },
     );
