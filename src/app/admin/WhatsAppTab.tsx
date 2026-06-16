@@ -8,6 +8,7 @@ import {
   RefreshCw, Search, Eye, Ban, X, Shield, ExternalLink,
   CalendarClock, Clock,
 } from "lucide-react";
+import WhatsAppProfilePanel from "./WhatsAppProfilePanel";
 
 type Audience = "verified" | "unverified" | "all";
 
@@ -881,6 +882,9 @@ export default function WhatsAppTab() {
         <h2 className="text-lg font-bold text-[#003368]">WhatsApp Campaigns</h2>
         <p className="text-sm text-slate-500 mt-1">Send approved WhatsApp template messages to your registrants.</p>
       </div>
+
+      {/* Connected-number business profile (photo, about, description, etc.) */}
+      <WhatsAppProfilePanel />
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_288px] gap-6 items-start">
 

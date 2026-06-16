@@ -41,6 +41,45 @@ export function getBroadcastCreds(): {
   };
 }
 
+// ── Business-profile credential resolution ────────────────────────────────────
+// The deployment may run one or two WhatsApp numbers: the OTP number (META_WA_*)
+// and an optional dedicated broadcast number (META_WA_BROADCAST_*). The number
+// profile editor needs to target one specific number's phone-number id + token.
+
+export type WaNumberKey = 'otp' | 'broadcast';
+
+/** Phone-number id + access token for the requested number. */
+export function getNumberCreds(which: WaNumberKey): { waAccessToken?: string; waPhoneId?: string } {
+  if (which === 'broadcast') {
+    const c = getBroadcastCreds();
+    return { waAccessToken: c.waAccessToken, waPhoneId: c.waPhoneId };
+  }
+  return {
+    waAccessToken: process.env.META_WA_ACCESS_TOKEN,
+    waPhoneId:     process.env.META_WA_PHONE_NUMBER_ID,
+  };
+}
+
+/**
+ * Which numbers the UI should offer. `broadcast` is only marked configured when
+ * its OWN env vars are set (a distinct number) — otherwise getBroadcastCreds()
+ * just falls back to the OTP number, so there's nothing separate to edit.
+ */
+export function listWaNumbers(): { key: WaNumberKey; label: string; configured: boolean }[] {
+  return [
+    {
+      key: 'broadcast',
+      label: 'Broadcast number',
+      configured: !!(process.env.META_WA_BROADCAST_ACCESS_TOKEN && process.env.META_WA_BROADCAST_PHONE_NUMBER_ID),
+    },
+    {
+      key: 'otp',
+      label: 'OTP number',
+      configured: !!(process.env.META_WA_ACCESS_TOKEN && process.env.META_WA_PHONE_NUMBER_ID),
+    },
+  ];
+}
+
 export async function sendWhatsAppOtp(
   phone: string,
   otp: string,
