@@ -3251,6 +3251,34 @@ export async function getWhatsAppCampaignLogs(
   }));
 }
 
+export interface WaCampaignConversion {
+  reached: number;            // distinct phones the campaign actually reached (sent/delivered/read)
+  unverifiedReached: number;  // of those, the ones NOT already verified before the send
+  verifiedAfter: number;      // of the unverified, how many have since completed OTP
+}
+
+/**
+ * "Unverified → verified" conversion for one campaign. See the SQL function in
+ * migration 0028. Returns zeroes (never throws) so a stats panel can degrade
+ * gracefully if the RPC isn't deployed yet.
+ */
+export async function getWhatsAppCampaignConversion(campaignId: string): Promise<WaCampaignConversion> {
+  const zero: WaCampaignConversion = { reached: 0, unverifiedReached: 0, verifiedAfter: 0 };
+  try {
+    const { data, error } = await client().rpc('whatsapp_campaign_conversion', { p_campaign_id: campaignId });
+    if (error) { console.error('[db.getWhatsAppCampaignConversion]', error); return zero; }
+    const row = Array.isArray(data) ? data[0] : data;
+    return {
+      reached:           (row?.reached as number | null) ?? 0,
+      unverifiedReached: (row?.unverified_reached as number | null) ?? 0,
+      verifiedAfter:     (row?.verified_after as number | null) ?? 0,
+    };
+  } catch (err) {
+    console.error('[db.getWhatsAppCampaignConversion]', err);
+    return zero;
+  }
+}
+
 /**
  * Recomputes a campaign's stored counters (total_recipients / sent_count /
  * failed_count / status) from its send log, deduped to ONE row per phone

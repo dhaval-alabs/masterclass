@@ -75,6 +75,13 @@ interface WaSendLog {
   readAt: string | null;
 }
 
+// Unverified→verified conversion for a campaign (server-computed, see migration 0028).
+interface WaConversion {
+  reached: number;
+  unverifiedReached: number;
+  verifiedAfter: number;
+}
+
 interface WaCampaignStats {
   total: number;
   sent: number;        // dispatched: sent | delivered | read
@@ -461,6 +468,7 @@ export default function WhatsAppTab() {
   const [expandedId, setExpandedId]                 = useState<string | null>(null);
   const [logsTab, setLogsTab]                       = useState<Record<string, "stats" | "recipients">>({});
   const [campaignLogs, setCampaignLogs]             = useState<Record<string, WaSendLog[]>>({});
+  const [campaignConversions, setCampaignConversions] = useState<Record<string, WaConversion>>({});
   const [isLoadingLogs, setIsLoadingLogs]           = useState<string | null>(null);
   const [lastLogsRefresh, setLastLogsRefresh]       = useState<Date | null>(null);
   const [isReconciling, setIsReconciling]           = useState(false);
@@ -536,6 +544,7 @@ export default function WhatsAppTab() {
       if (res.ok) {
         const data = await readJson(res);
         setCampaignLogs(prev => ({ ...prev, [campaignId]: data.logs ?? [] }));
+        if (data.conversion) setCampaignConversions(prev => ({ ...prev, [campaignId]: data.conversion }));
         setLastLogsRefresh(new Date());
       }
     } finally { setIsLoadingLogs(null); }
@@ -1527,6 +1536,32 @@ export default function WhatsAppTab() {
                                     <p className={`text-2xl font-extrabold tabular-nums ${stats.skipped > 0 ? "text-amber-600" : "text-slate-400"}`}>{stats.skipped.toLocaleString()}</p>
                                   </div>
                                 </div>
+
+                                {/* Unverified → verified conversion — only for campaigns that reached unverified people */}
+                                {(c.audience === "unverified" || c.audience === "all") && (() => {
+                                  const conv = campaignConversions[c.id];
+                                  if (!conv || conv.unverifiedReached === 0) return null;
+                                  const rate = Math.round((conv.verifiedAfter / conv.unverifiedReached) * 100);
+                                  return (
+                                    <div className="bg-[#00DF83]/5 border border-[#00DF83]/30 rounded-xl p-4">
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <CheckCircle className="w-4 h-4 text-[#00875A]" />
+                                        <p className="text-[10px] font-bold uppercase tracking-wider text-[#00875A]">Verified after this campaign</p>
+                                      </div>
+                                      <div className="flex items-baseline gap-2">
+                                        <span className="text-2xl font-extrabold tabular-nums text-[#00875A]">{conv.verifiedAfter.toLocaleString()}</span>
+                                        <span className="text-sm text-slate-500">of {conv.unverifiedReached.toLocaleString()} unverified reached</span>
+                                        <span className="ml-auto text-lg font-bold tabular-nums text-[#00875A]">{rate}%</span>
+                                      </div>
+                                      <div className="mt-2 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                                        <div className="h-full rounded-full bg-[#00DF83]" style={{ width: `${rate}%` }} />
+                                      </div>
+                                      <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+                                        Recipients who weren&apos;t verified when this was sent and have completed OTP since. Anyone already verified before the send is excluded.
+                                      </p>
+                                    </div>
+                                  );
+                                })()}
 
                                 {/* Webhook-pending hint */}
                                 {!stats.hasDeliveryData && stats.sent > 0 && (
