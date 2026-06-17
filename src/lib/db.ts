@@ -3280,6 +3280,24 @@ export async function getWhatsAppCampaignConversion(campaignId: string): Promise
 }
 
 /**
+ * The phone numbers behind the conversion count — recipients who went from
+ * unverified → verified after this campaign. Lets the recipients list flag who
+ * converted. See migration 0029. Returns [] (never throws) when undeployed.
+ */
+export async function getWhatsAppCampaignConvertedPhones(campaignId: string): Promise<string[]> {
+  try {
+    const { data, error } = await client().rpc('whatsapp_campaign_converted_phones', { p_campaign_id: campaignId });
+    if (error) { console.error('[db.getWhatsAppCampaignConvertedPhones]', error); return []; }
+    return (Array.isArray(data) ? data : [])
+      .map((r: { phone: string | null }) => r.phone ?? '')
+      .filter(Boolean);
+  } catch (err) {
+    console.error('[db.getWhatsAppCampaignConvertedPhones]', err);
+    return [];
+  }
+}
+
+/**
  * Recomputes a campaign's stored counters (total_recipients / sent_count /
  * failed_count / status) from its send log, deduped to ONE row per phone
  * (best/furthest-along status wins). This undoes the drift caused by retries

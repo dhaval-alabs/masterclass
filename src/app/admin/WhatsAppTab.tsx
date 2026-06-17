@@ -469,6 +469,8 @@ export default function WhatsAppTab() {
   const [logsTab, setLogsTab]                       = useState<Record<string, "stats" | "recipients">>({});
   const [campaignLogs, setCampaignLogs]             = useState<Record<string, WaSendLog[]>>({});
   const [campaignConversions, setCampaignConversions] = useState<Record<string, WaConversion>>({});
+  // Last-10-digit phone keys of recipients who verified after each campaign (the "who").
+  const [campaignConverted, setCampaignConverted] = useState<Record<string, Set<string>>>({});
   const [isLoadingLogs, setIsLoadingLogs]           = useState<string | null>(null);
   const [lastLogsRefresh, setLastLogsRefresh]       = useState<Date | null>(null);
   const [isReconciling, setIsReconciling]           = useState(false);
@@ -545,6 +547,12 @@ export default function WhatsAppTab() {
         const data = await readJson(res);
         setCampaignLogs(prev => ({ ...prev, [campaignId]: data.logs ?? [] }));
         if (data.conversion) setCampaignConversions(prev => ({ ...prev, [campaignId]: data.conversion }));
+        if (Array.isArray(data.convertedPhones)) {
+          const keys = new Set<string>(
+            (data.convertedPhones as string[]).map(p => (p || "").replace(/\D/g, "").slice(-10)).filter(Boolean),
+          );
+          setCampaignConverted(prev => ({ ...prev, [campaignId]: keys }));
+        }
         setLastLogsRefresh(new Date());
       }
     } finally { setIsLoadingLogs(null); }
@@ -1718,11 +1726,20 @@ export default function WhatsAppTab() {
                                 <span>Time</span>
                               </div>
                               <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
-                                {uniqueLogs.map(log => (
+                                {uniqueLogs.map(log => {
+                                  const isConverted = campaignConverted[c.id]?.has((log.phone || "").replace(/\D/g, "").slice(-10));
+                                  return (
                                   <div key={log.id} className="grid grid-cols-[auto_1fr_auto_auto] gap-0 items-center px-4 py-2 hover:bg-slate-50 transition-colors">
                                     <LogStatusDot status={log.status} />
                                     <div className="pl-2 min-w-0">
-                                      <p className="text-xs font-semibold text-slate-700 truncate">{log.recipientName}</p>
+                                      <p className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                                        <span className="truncate">{log.recipientName}</span>
+                                        {isConverted && (
+                                          <span className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#00875A] bg-[#00DF83]/15 px-1.5 py-0.5 rounded-full" title="Was unverified — completed OTP after this campaign">
+                                            <CheckCircle className="w-2.5 h-2.5" /> Verified
+                                          </span>
+                                        )}
+                                      </p>
                                       <p className="text-[11px] font-mono text-slate-400">+91 {log.phone}</p>
                                     </div>
                                     <span className={`pr-4 text-xs capitalize font-semibold ${
@@ -1733,14 +1750,18 @@ export default function WhatsAppTab() {
                                     }`}>{log.status}</span>
                                     <span className="text-[11px] text-slate-400">{new Date(log.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
-                              <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 flex gap-4 text-[11px] text-slate-500">
+                              <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
                                 {(["sent", "delivered", "read", "failed", "skipped"] as WaSendLog["status"][]).map(s => {
                                   const cnt = uniqueLogs.filter(l => l.status === s).length;
                                   if (!cnt) return null;
                                   return <span key={s}><span className="font-semibold capitalize">{s}</span>: {cnt}</span>;
                                 })}
+                                {(campaignConverted[c.id]?.size ?? 0) > 0 && (
+                                  <span className="text-[#00875A]"><span className="font-semibold">Verified after</span>: {campaignConverted[c.id].size}</span>
+                                )}
                               </div>
                             </div>
                           )}

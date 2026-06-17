@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getWhatsAppCampaignLogs, getWhatsAppCampaignConversion } from '@/lib/db';
+import { getWhatsAppCampaignLogs, getWhatsAppCampaignConversion, getWhatsAppCampaignConvertedPhones } from '@/lib/db';
 
 export async function GET(
   _req: NextRequest,
@@ -8,12 +8,14 @@ export async function GET(
   const { id } = await params;
 
   try {
-    // Logs drive the delivery funnel; conversion is the unverified→verified metric.
-    const [logs, conversion] = await Promise.all([
+    // Logs drive the delivery funnel; conversion is the unverified→verified metric;
+    // convertedPhones flags which recipients in the list actually converted.
+    const [logs, conversion, convertedPhones] = await Promise.all([
       getWhatsAppCampaignLogs(id),
       getWhatsAppCampaignConversion(id),
+      getWhatsAppCampaignConvertedPhones(id),
     ]);
-    return NextResponse.json({ logs, conversion });
+    return NextResponse.json({ logs, conversion, convertedPhones });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
