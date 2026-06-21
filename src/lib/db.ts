@@ -1288,6 +1288,31 @@ export async function getWebinarConfig(): Promise<WebinarConfig> {
   };
 }
 
+/**
+ * The Zoom webinar/meeting ID stored on the singleton `settings` row — i.e. the
+ * value an admin edits in the Webinar tab — WITHOUT the active-session merge
+ * that getWebinarConfig() applies (that merge prefers the active session's own
+ * zoomWebinarId, which can be a stale per-cohort snapshot).
+ *
+ * Attendance sync uses this as the authoritative "current webinar" ID so a
+ * portal edit always takes effect, even when the active session row still
+ * carries an old zoom_webinar_id. Returns null when unset.
+ */
+export async function getSettingsZoomWebinarId(): Promise<string | null> {
+  try {
+    const { data, error } = await client()
+      .from('settings')
+      .select('zoom_webinar_id')
+      .eq('id', 'speaker')
+      .maybeSingle<{ zoom_webinar_id: string | null }>();
+    if (error) throw error;
+    return data?.zoom_webinar_id?.trim() || null;
+  } catch (err) {
+    console.error('[db.getSettingsZoomWebinarId]', err);
+    return null;
+  }
+}
+
 export async function getFeatures(): Promise<Feature[]> {
   try {
     const { data, error } = await client()

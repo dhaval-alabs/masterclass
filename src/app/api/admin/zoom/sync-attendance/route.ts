@@ -22,6 +22,7 @@ import {
   getLatestAttendanceSyncRun,
   getActiveWebinarSession,
   getWebinarSessionById,
+  getSettingsZoomWebinarId,
   scheduleWhatsAppForRecipient,
 } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
@@ -101,7 +102,27 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: err }, { status: 400 });
     }
 
-    const webinarOverride = targetSession.zoomWebinarId?.trim() || null;
+    // Resolve which Zoom webinar/meeting ID to pull the report for.
+    //
+    // Sources:
+    //   - sessionZoomId  : the target session row's own zoom_webinar_id
+    //   - settingsZoomId : the portal Webinar-tab value (the `settings` row),
+    //                      i.e. what an admin edits as "the current webinar ID"
+    //   - env fallback   : ZOOM_WEBINAR_ID, applied inside fetchWebinarAttendees
+    //
+    // Precedence:
+    //   - Default "Sync Attendance" run (active cohort): trust the portal value
+    //     first. The per-session row can hold a stale snapshot (it is only
+    //     re-synced from the Webinar tab when a session is active at edit time),
+    //     so reading it first silently used an OLD id even after the admin
+    //     updated the portal. The settings row always reflects the latest edit.
+    //   - Explicit past-cohort sync (sessionId provided): trust that session's
+    //     own historical id first, since each past cohort ran on its own webinar.
+    const sessionZoomId = targetSession.zoomWebinarId?.trim() || null;
+    const settingsZoomId = await getSettingsZoomWebinarId();
+    const webinarOverride = targetSessionId
+      ? (sessionZoomId || settingsZoomId)
+      : (settingsZoomId || sessionZoomId);
 
     // 1. Fetch attendees from Zoom.
     const result = await fetchWebinarAttendees(webinarOverride);
