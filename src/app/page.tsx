@@ -104,7 +104,11 @@ export default async function MasterclassLandingPage() {
   const saveSpotCta      = config.saveSpotCtaText      ?? 'Save My Spot for the Live Session';
 
   // Form card
-  const formPillDate     = config.formPillDateLabel    ?? 'Sat, 6 June · 7:00 PM IST';
+  // Derive the date pill from the active session's date/time (same source as the
+  // hero badge), dropping the year for the compact pill. The standalone
+  // formPillDateLabel field doesn't follow the active session, so it went stale
+  // and showed an old cohort's date after the session changed.
+  const formPillDate     = `${dateLabel.replace(/,?\s*\d{4}\b/, '')} · ${timeLabel}`;
   const formPillSeats    = config.formPillSeatsLabel   ?? 'Limited Seats';
   // formOtpFooter (config.formOtpFooterLabel) lives inside RegistrationForm.tsx
   // and would require prop drilling — left hardcoded in the form for now.
