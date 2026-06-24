@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Plus, X, Check, Square, Power } from "lucide-react";
+import { Loader2, Plus, X, Check, Square, Power, Copy } from "lucide-react";
 
 type SessionStatus = "upcoming" | "active" | "completed";
 
@@ -17,6 +17,30 @@ function fromIstPicker(local: string): { iso: string; dateLabel: string; timeLab
   const dateLabel = `${ist({ weekday: "short" })}, ${ist({ day: "numeric" })} ${ist({ month: "long" })} ${ist({ year: "numeric" })}`;
   const timeLabel = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" }).format(d) + " IST";
   return { iso: d.toISOString(), dateLabel, timeLabel };
+}
+
+// Blank create-form defaults, shared between "New session" and post-create reset.
+const BLANK_FORM = {
+  code: "",
+  title: "",
+  dateLabel: "",
+  timeLabel: "",
+  datetimeUtc: "",
+  durationLabel: "90 Min",
+  zoomWebinarId: "",
+  whatsappTemplateName: "form_otp",
+  lsqSourceName: "PPC-SM",
+  metaEventSuffix: "",
+};
+
+// Suggest the next cohort code by incrementing the trailing number, preserving
+// the prefix and zero-padding (W002 -> W003, W010 -> W011). Returns "" when the
+// code has no trailing number to bump.
+function nextCode(code: string): string {
+  const m = code.match(/^(.*?)(\d+)(\D*)$/);
+  if (!m) return "";
+  const [, prefix, num, suffix] = m;
+  return `${prefix}${String(Number(num) + 1).padStart(num.length, "0")}${suffix}`;
 }
 
 type WebinarSession = {
@@ -80,18 +104,8 @@ export default function SessionsTab() {
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [istPicker, setIstPicker] = useState(""); // datetime-local value (IST)
-  const [form, setForm] = useState({
-    code: "",
-    title: "",
-    dateLabel: "",
-    timeLabel: "",
-    datetimeUtc: "",
-    durationLabel: "90 Min",
-    zoomWebinarId: "",
-    whatsappTemplateName: "form_otp",
-    lsqSourceName: "PPC-SM",
-    metaEventSuffix: "",
-  });
+  const [reuseFrom, setReuseFrom] = useState<string | null>(null); // code of the session being repurposed
+  const [form, setForm] = useState(BLANK_FORM);
 
   async function load() {
     setLoading(true);
@@ -129,19 +143,9 @@ export default function SessionsTab() {
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
       setShowCreate(false);
+      setReuseFrom(null);
       setIstPicker("");
-      setForm({
-        code: "",
-        title: "",
-        dateLabel: "",
-        timeLabel: "",
-        datetimeUtc: "",
-        durationLabel: "90 Min",
-        zoomWebinarId: "",
-        whatsappTemplateName: "form_otp",
-        lsqSourceName: "PPC-SM",
-        metaEventSuffix: "",
-      });
+      setForm(BLANK_FORM);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create");
@@ -175,6 +179,39 @@ export default function SessionsTab() {
     }
   }
 
+  function openCreate() {
+    setForm(BLANK_FORM);
+    setIstPicker("");
+    setReuseFrom(null);
+    setError(null);
+    setShowCreate(true);
+  }
+
+  function closeCreate() {
+    setShowCreate(false);
+    setReuseFrom(null);
+  }
+
+  // Repurpose an existing session for the next cohort: carry over the reusable
+  // setup (title, duration, WhatsApp template, LSQ source) and clear the
+  // per-occurrence details (code is auto-bumped, date/time + Zoom ID cleared)
+  // so they're set fresh. This opens the create form — it does NOT touch the
+  // original session, so its registrations and attendance stay intact.
+  function handleReuse(s: WebinarSession) {
+    setForm({
+      ...BLANK_FORM,
+      code: nextCode(s.code),
+      title: s.title,
+      durationLabel: s.durationLabel || BLANK_FORM.durationLabel,
+      whatsappTemplateName: s.whatsappTemplateName || BLANK_FORM.whatsappTemplateName,
+      lsqSourceName: s.lsqSourceName || BLANK_FORM.lsqSourceName,
+    });
+    setIstPicker("");
+    setReuseFrom(s.code);
+    setError(null);
+    setShowCreate(true);
+  }
+
   const activeCount = sessions.filter((s) => s.status === "active").length;
 
   return (
@@ -182,7 +219,7 @@ export default function SessionsTab() {
       <div className="flex items-center justify-between mb-1">
         <h2 className="text-lg font-bold text-[#003368]">Webinar Sessions</h2>
         <button
-          onClick={() => setShowCreate(true)}
+          onClick={openCreate}
           className="text-sm bg-[#003368] hover:bg-[#002244] text-white font-semibold py-2 px-4 rounded-lg flex items-center gap-2"
         >
           <Plus className="w-4 h-4" /> New session
@@ -245,6 +282,14 @@ export default function SessionsTab() {
                       <td className="px-5 py-3"><StatusPill status={s.status} /></td>
                       <td className="px-5 py-3">
                         <div className="flex items-center justify-end gap-2">
+                          <button
+                            disabled={busy}
+                            onClick={() => handleReuse(s)}
+                            className="text-xs font-semibold text-[#003368] hover:bg-[#003368]/10 px-2 py-1 rounded flex items-center gap-1 disabled:opacity-40"
+                            title="Reuse this session's setup for a new cohort. Opens a pre-filled create form — the original session and its registrations stay untouched."
+                          >
+                            <Copy className="w-3.5 h-3.5" /> Reuse
+                          </button>
                           {s.status !== "active" && s.status !== "completed" && (
                             <button
                               disabled={busy}
@@ -289,12 +334,19 @@ export default function SessionsTab() {
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-              <h3 className="font-bold text-[#003368]">Create new session</h3>
-              <button onClick={() => setShowCreate(false)} className="text-slate-400 hover:text-slate-600">
+              <h3 className="font-bold text-[#003368]">{reuseFrom ? `New session — reusing ${reuseFrom}` : "Create new session"}</h3>
+              <button onClick={closeCreate} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <form onSubmit={handleCreate} className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+              {reuseFrom && (
+                <div className="bg-[#003368]/5 border border-[#003368]/15 text-[#003368] text-xs rounded-lg p-3 leading-relaxed">
+                  Reusing the setup from <span className="font-mono font-semibold">{reuseFrom}</span> — title, duration, WhatsApp template &amp; LSQ source were carried over.
+                  Set a fresh <span className="font-semibold">code</span>, <span className="font-semibold">date/time</span> and <span className="font-semibold">Zoom ID</span> below.
+                  This creates a brand-new session; <span className="font-mono font-semibold">{reuseFrom}</span> and its registrations stay untouched.
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold mb-1 text-slate-600 uppercase tracking-wide">Code *</label>
@@ -360,7 +412,7 @@ export default function SessionsTab() {
               </div>
             </form>
             <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
-              <button onClick={() => setShowCreate(false)} disabled={creating} className="text-sm font-semibold text-slate-500 hover:text-slate-700 disabled:opacity-60">
+              <button onClick={closeCreate} disabled={creating} className="text-sm font-semibold text-slate-500 hover:text-slate-700 disabled:opacity-60">
                 Cancel
               </button>
               <button onClick={handleCreate} disabled={creating} className="text-sm bg-[#003368] hover:bg-[#002244] text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 disabled:opacity-60">
