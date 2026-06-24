@@ -33,9 +33,10 @@ export async function POST(request: Request) {
   if (!origin.ok) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   if (!(await requireAdmin())) return new NextResponse('Unauthorized', { status: 401 });
 
+  let code = '';
   try {
     const body = await request.json();
-    const code = typeof body.code === 'string' ? body.code.trim() : '';
+    code = typeof body.code === 'string' ? body.code.trim() : '';
     const title = typeof body.title === 'string' ? body.title.trim() : '';
     if (!code) return NextResponse.json({ error: 'Code is required (e.g. W002)' }, { status: 400 });
     if (!title) return NextResponse.json({ error: 'Title is required' }, { status: 400 });
@@ -54,11 +55,19 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({ session: created });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Failed to create session';
-    const isUnique = msg.toLowerCase().includes('unique') || msg.includes('23505');
     console.error('[sessions POST] error:', err);
+    // Supabase/PostgREST errors are plain objects ({ code, message, details }),
+    // NOT Error instances — so `err instanceof Error` misses them. Read the
+    // Postgres SQLSTATE (23505 = unique_violation) and message defensively.
+    const e = (err ?? {}) as { code?: string; message?: string };
+    const rawMsg = e.message || (err instanceof Error ? err.message : '') || 'Failed to create session';
+    const isUnique = e.code === '23505' || /unique|duplicate key/i.test(rawMsg);
     return NextResponse.json(
-      { error: isUnique ? 'A session with that code already exists' : msg },
+      {
+        error: isUnique
+          ? `A session with code "${code}" already exists — pick a different code.`
+          : rawMsg,
+      },
       { status: isUnique ? 409 : 500 },
     );
   }

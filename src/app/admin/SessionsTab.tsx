@@ -43,6 +43,16 @@ function nextCode(code: string): string {
   return `${prefix}${String(Number(num) + 1).padStart(num.length, "0")}${suffix}`;
 }
 
+// Like nextCode, but keeps bumping past codes that are already taken so a
+// reuse never pre-fills a colliding code (codes are unique in the DB).
+function nextAvailableCode(code: string, taken: Set<string>): string {
+  let candidate = nextCode(code);
+  for (let i = 0; candidate && taken.has(candidate) && i < 1000; i++) {
+    candidate = nextCode(candidate);
+  }
+  return candidate;
+}
+
 type WebinarSession = {
   id: string;
   code: string;
@@ -198,9 +208,10 @@ export default function SessionsTab() {
   // so they're set fresh. This opens the create form — it does NOT touch the
   // original session, so its registrations and attendance stay intact.
   function handleReuse(s: WebinarSession) {
+    const taken = new Set(sessions.map((x) => x.code));
     setForm({
       ...BLANK_FORM,
-      code: nextCode(s.code),
+      code: nextAvailableCode(s.code, taken),
       title: s.title,
       durationLabel: s.durationLabel || BLANK_FORM.durationLabel,
       whatsappTemplateName: s.whatsappTemplateName || BLANK_FORM.whatsappTemplateName,
