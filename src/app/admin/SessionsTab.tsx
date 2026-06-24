@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Plus, X, Check, Square, Power, Copy } from "lucide-react";
+import { Loader2, Plus, X, Check, Square, Power, Copy, Trash2 } from "lucide-react";
 
 type SessionStatus = "upcoming" | "active" | "completed";
 
@@ -189,6 +189,22 @@ export default function SessionsTab() {
     }
   }
 
+  async function handleDelete(s: WebinarSession) {
+    if (!confirm(`Delete session ${s.code} permanently?\n\nThis only works if it has no registrations — cohorts with registration/attendance data are protected and can't be deleted.`)) return;
+    setPendingId(s.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/sessions/${s.id}`, { method: "DELETE" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
   function openCreate() {
     setForm(BLANK_FORM);
     setIstPicker("");
@@ -327,6 +343,16 @@ export default function SessionsTab() {
                               className="text-xs font-semibold text-slate-500 hover:text-amber-700 hover:bg-amber-50 px-2 py-1 rounded flex items-center gap-1 disabled:opacity-40"
                             >
                               <Square className="w-3.5 h-3.5" /> End
+                            </button>
+                          )}
+                          {s.status !== "active" && (
+                            <button
+                              disabled={busy}
+                              onClick={() => handleDelete(s)}
+                              className="text-xs font-semibold text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded flex items-center gap-1 disabled:opacity-40"
+                              title="Delete this session permanently. Blocked if it has registrations, so cohort data stays safe."
+                            >
+                              <Trash2 className="w-3.5 h-3.5" /> Delete
                             </button>
                           )}
                         </div>

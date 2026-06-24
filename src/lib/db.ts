@@ -1923,6 +1923,18 @@ export async function endWebinarSession(id: string): Promise<WebinarSession> {
   return mapSession(data);
 }
 
+// Hard-deletes a session row. The registrations/attendance_sync_runs FKs use
+// ON DELETE RESTRICT, so this throws a 23503 foreign-key error if the session
+// still has registrations or attendance records — by design, so a cohort's
+// history can't be silently destroyed. Callers surface that as a friendly message.
+export async function deleteWebinarSession(id: string): Promise<void> {
+  const { error } = await client()
+    .from('webinar_sessions')
+    .delete()
+    .eq('id', id);
+  if (error) throw error;
+}
+
 export async function updateWebinarSession(
   id: string,
   patch: Partial<{
