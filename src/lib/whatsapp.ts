@@ -18,6 +18,10 @@ const GRAPH_API_VERSION = 'v22.0';
 export type WhatsAppSendResult = {
   status: 'sent' | 'api_failed' | 'skipped';
   error: string | null;
+  // Meta message id (wamid) returned on a successful send. Persisted with the
+  // registration so the delivery-status webhook can later flip the row to
+  // delivered / read / failed. Absent on skipped / api_failed sends.
+  messageId?: string | null;
 };
 
 /**
@@ -108,7 +112,16 @@ export async function sendWhatsAppOtp(
     });
 
     if (waRes.ok) {
-      return { status: 'sent', error: null };
+      // Capture Meta's message id (wamid) so the delivery-status webhook can
+      // later attach delivered / read / failed telemetry to this registration.
+      // NOTE: a 200 here means Meta ACCEPTED the message, not that it was
+      // delivered — the webhook is what tells us if delivery actually failed.
+      let messageId: string | null = null;
+      try {
+        const data = await waRes.json() as { messages?: { id: string }[] };
+        messageId = data?.messages?.[0]?.id ?? null;
+      } catch { /* body not JSON — leave messageId null */ }
+      return { status: 'sent', error: null, messageId };
     }
 
     // Capture Meta's specific error message + code for telemetry.

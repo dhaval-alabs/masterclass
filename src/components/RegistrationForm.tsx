@@ -375,16 +375,21 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
       if (result.success) {
         const incomingZoomUrl: string = result.zoomJoinUrl || '';
         setZoomJoinUrl(incomingZoomUrl);
+        setToken(result.token);
+        setIsChatStep(false);
+        setIsOtpStep(true);
         if (result.fallback) {
-          setIsSuccess(true);
-          setTimeout(() => {
-            window.location.href = buildThankYouUrl({ zoomJoinUrl: incomingZoomUrl });
-          }, 1500);
+          // WhatsApp send failed. Previously we silently marked the user as
+          // registered and redirected to the thank-you page, which hid every
+          // delivery failure. Instead, surface it: land on the OTP step with a
+          // clear error and an immediately-available resend / help link.
+          setResendTimer(0);
+          setResendNotice({
+            kind: 'err',
+            text: "We couldn't send your verification code to WhatsApp. Tap “Resend code” below, or use the WhatsApp help link.",
+          });
         } else {
-          setToken(result.token);
           setResendTimer(60);
-          setIsChatStep(false);
-          setIsOtpStep(true);
         }
       } else {
         setError(result.error || 'Something went wrong. Please try again.');
