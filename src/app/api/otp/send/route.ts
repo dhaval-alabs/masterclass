@@ -52,10 +52,18 @@ export async function POST(req: NextRequest) {
     if (hmacSecret.length < 32) throw new Error('OTP_HMAC_SECRET must be at least 32 chars');
     const hmac = crypto.createHmac('sha256', hmacSecret).update(`${phone}:${otp}:${expiry}`).digest('hex');
 
+    // OTP requirement is per-session (admin toggle). When disabled, skip the
+    // WhatsApp call entirely — the client finalizes registration directly via
+    // /api/otp/verify, which re-checks otpRequired server-side so a client
+    // can't bypass a session that still requires OTP.
+    const otpRequired = config?.otpRequired !== false;
+
     // Send WhatsApp OTP
     const whatsappTemplate = config?.whatsappTemplateName?.trim() || 'form_otp';
     const zoomWebinarId = config?.zoomWebinarId?.trim() || null;
-    const waResult = await sendWhatsAppOtp(phone, otp, whatsappTemplate);
+    const waResult = otpRequired
+      ? await sendWhatsAppOtp(phone, otp, whatsappTemplate)
+      : { status: 'skipped' as const, error: null, messageId: null };
     const waSuccess = waResult.status === 'sent';
 
     // registrationId comes from /api/lead/capture (step 1); embed in token so
@@ -73,7 +81,7 @@ export async function POST(req: NextRequest) {
     if (registrationId) {
       try {
         await recordOtpSendResult(registrationId, {
-          whatsappStatus: waResult.status,
+          whatsappStatus: otpRequired ? waResult.status : 'otp_disabled',
           whatsappError: waResult.error,
           whatsappMessageId: waResult.messageId ?? null,
         });
@@ -91,7 +99,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       token,
-      fallback: !waSuccess,
+      // fallback = WhatsApp send failed while OTP was required (legacy behaviour).
+      fallback: otpRequired && !waSuccess,
+      // otpDisabled = admin turned OTP off for this session; the client should
+      // skip the OTP screen and finalize registration directly.
+      otpDisabled: !otpRequired,
     });
 
   } catch (error) {

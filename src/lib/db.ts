@@ -225,6 +225,9 @@ export interface WebinarConfig extends SpeakerSettings {
   activeSessionId: string | null;
   activeSessionCode: string | null;
   activeSessionMetaEventSuffix: string | null;
+  // Whether the active session requires WhatsApp OTP verification. Defaults to
+  // true; set false per-session in the admin Sessions tab to skip OTP.
+  otpRequired: boolean;
   webinarTitle: string | null;
   webinarSubtitle: string | null;
   eyebrowText: string | null;
@@ -488,6 +491,8 @@ function mapWebinarConfig(row: SettingsRow): WebinarConfig {
     activeSessionId: null,
     activeSessionCode: null,
     activeSessionMetaEventSuffix: null,
+    // Defaults to requiring OTP; getWebinarConfig() overrides from the active session.
+    otpRequired: true,
     // New dynamic fields
     webinarTitle: row.webinar_title ?? null,
     webinarSubtitle: row.webinar_subtitle ?? null,
@@ -1325,6 +1330,7 @@ export async function getWebinarConfig(): Promise<WebinarConfig> {
     activeSessionId: session.id,
     activeSessionCode: session.code,
     activeSessionMetaEventSuffix: session.metaEventSuffix,
+    otpRequired: session.otpRequired,
     // Per-session speaker overrides (set when the session came from a speaker
     // submission) — activating that session swaps the live speaker on the LP.
     speakerName: session.speakerName ?? base.speakerName,
@@ -1800,6 +1806,9 @@ export interface WebinarSession {
   whatsappTemplateName: string | null;
   lsqSourceName: string | null;
   metaEventSuffix: string | null;
+  // When false, the registration form skips WhatsApp OTP verification for this
+  // session (admin workaround for WhatsApp delivery outages). Defaults to true.
+  otpRequired: boolean;
   // Per-session speaker profile (set when created from a speaker submission).
   // When the session is active, these override the global settings speaker row.
   speakerName: string | null;
@@ -1826,6 +1835,7 @@ type WebinarSessionRow = {
   whatsapp_template_name: string | null;
   lsq_source_name: string | null;
   meta_event_suffix: string | null;
+  otp_required?: boolean | null;
   speaker_name: string | null;
   speaker_title: string | null;
   speaker_image: string | null;
@@ -1851,6 +1861,7 @@ function mapSession(row: WebinarSessionRow): WebinarSession {
     whatsappTemplateName: row.whatsapp_template_name,
     lsqSourceName: row.lsq_source_name,
     metaEventSuffix: row.meta_event_suffix,
+    otpRequired: row.otp_required ?? true,
     speakerName: row.speaker_name ?? null,
     speakerTitle: row.speaker_title ?? null,
     speakerImage: row.speaker_image ?? null,
@@ -1910,6 +1921,7 @@ export async function createWebinarSession(input: {
   whatsappTemplateName?: string | null;
   lsqSourceName?: string | null;
   metaEventSuffix?: string | null;
+  otpRequired?: boolean;
   speakerName?: string | null;
   speakerTitle?: string | null;
   speakerImage?: string | null;
@@ -1934,6 +1946,7 @@ export async function createWebinarSession(input: {
       speaker_title: input.speakerTitle ?? null,
       speaker_image: input.speakerImage ?? null,
       speaker_bio: input.speakerBio ?? null,
+      otp_required: input.otpRequired ?? true,
       status: 'upcoming',
     })
     .select('*')
@@ -2003,6 +2016,7 @@ export async function updateWebinarSession(
     whatsappTemplateName: string | null;
     lsqSourceName: string | null;
     metaEventSuffix: string | null;
+    otpRequired: boolean;
     speakerName: string | null;
     speakerTitle: string | null;
     speakerImage: string | null;
@@ -2019,6 +2033,7 @@ export async function updateWebinarSession(
   if (patch.whatsappTemplateName !== undefined) dbPatch.whatsapp_template_name = patch.whatsappTemplateName;
   if (patch.lsqSourceName !== undefined) dbPatch.lsq_source_name = patch.lsqSourceName;
   if (patch.metaEventSuffix !== undefined) dbPatch.meta_event_suffix = patch.metaEventSuffix;
+  if (patch.otpRequired !== undefined) dbPatch.otp_required = patch.otpRequired;
   if (patch.speakerName !== undefined) dbPatch.speaker_name = patch.speakerName;
   if (patch.speakerTitle !== undefined) dbPatch.speaker_title = patch.speakerTitle;
   if (patch.speakerImage !== undefined) dbPatch.speaker_image = patch.speakerImage;

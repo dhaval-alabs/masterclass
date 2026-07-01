@@ -52,6 +52,7 @@ export async function POST(request: Request) {
       whatsappTemplateName: body.whatsappTemplateName ?? null,
       lsqSourceName: body.lsqSourceName ?? null,
       metaEventSuffix: body.metaEventSuffix ?? null,
+      otpRequired: typeof body.otpRequired === 'boolean' ? body.otpRequired : undefined,
     });
     return NextResponse.json({ session: created });
   } catch (err) {

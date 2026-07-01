@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Plus, X, Check, Square, Power, Copy, Trash2 } from "lucide-react";
+import { Loader2, Plus, X, Check, Square, Power, Copy, Trash2, ShieldCheck, ShieldOff } from "lucide-react";
 
 type SessionStatus = "upcoming" | "active" | "completed";
 
@@ -65,6 +65,7 @@ type WebinarSession = {
   whatsappTemplateName: string | null;
   lsqSourceName: string | null;
   metaEventSuffix: string | null;
+  otpRequired: boolean;
   status: SessionStatus;
   createdAt: string;
   activatedAt: string | null;
@@ -184,6 +185,33 @@ export default function SessionsTab() {
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  // Toggle whether the registration form requires WhatsApp OTP for this
+  // session. Turning it OFF lets registrations complete without a code — the
+  // workaround for WhatsApp delivery outages. Confirm when disabling because it
+  // weakens verification for the live cohort.
+  async function handleToggleOtp(s: WebinarSession) {
+    const turningOff = s.otpRequired;
+    if (turningOff && !confirm(
+      `Turn OFF OTP verification for ${s.code}?\n\nRegistrations will complete WITHOUT a WhatsApp code — anyone can register with an unverified number. Use this only while WhatsApp OTP delivery is broken, and turn it back on afterwards.`,
+    )) return;
+    setPendingId(s.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/sessions/${s.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update", otpRequired: !s.otpRequired }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to toggle OTP");
     } finally {
       setPendingId(null);
     }
@@ -309,6 +337,23 @@ export default function SessionsTab() {
                       <td className="px-5 py-3"><StatusPill status={s.status} /></td>
                       <td className="px-5 py-3">
                         <div className="flex items-center justify-end gap-2">
+                          <button
+                            disabled={busy}
+                            onClick={() => handleToggleOtp(s)}
+                            className={`text-xs font-semibold px-2 py-1 rounded flex items-center gap-1 disabled:opacity-40 ${
+                              s.otpRequired
+                                ? "text-[#00875A] hover:bg-[#00DF83]/10"
+                                : "text-amber-700 bg-amber-50 hover:bg-amber-100"
+                            }`}
+                            title={
+                              s.otpRequired
+                                ? "OTP verification is ON. Click to turn it OFF — registrations will complete without a WhatsApp code (use only during OTP delivery outages)."
+                                : "OTP verification is OFF — registrations complete without a code. Click to turn it back ON."
+                            }
+                          >
+                            {s.otpRequired ? <ShieldCheck className="w-3.5 h-3.5" /> : <ShieldOff className="w-3.5 h-3.5" />}
+                            OTP {s.otpRequired ? "On" : "Off"}
+                          </button>
                           <button
                             disabled={busy}
                             onClick={() => handleReuse(s)}

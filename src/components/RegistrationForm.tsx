@@ -376,6 +376,14 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
         const incomingZoomUrl: string = result.zoomJoinUrl || '';
         setZoomJoinUrl(incomingZoomUrl);
         setToken(result.token);
+        if (result.otpDisabled) {
+          // Admin turned OTP off for this session — no code is sent. Finalize
+          // registration straight away (Zoom + verified emails) and go to the
+          // thank-you page, passing the fresh token since setToken() is async.
+          submittingOtpRef.current = true;
+          await finalizeVerification('OTP_DISABLED', result.token);
+          return;
+        }
         setIsChatStep(false);
         setIsOtpStep(true);
         if (result.fallback) {
@@ -401,14 +409,14 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
     }
   };
 
-  const handleOtpSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (otp.length !== 4) return;
-
-    // Hard-block re-entry while OTP verify is in flight.
-    if (submittingOtpRef.current) return;
-    submittingOtpRef.current = true;
-
+  // Shared "verify + finalize registration" step. Used both by the OTP form
+  // submit and by the OTP-disabled path (which passes a placeholder code — the
+  // server authoritatively decides whether OTP is required for the session, so
+  // the placeholder is ignored when OTP is off and rejected when it's on).
+  const finalizeVerification = async (otpEntered: string, verifyToken?: string) => {
+    // token state is set via setToken() just before some callers reach here;
+    // that update is async, so callers pass the fresh token explicitly.
+    const activeToken = verifyToken ?? token;
     setIsLoading(true);
     setError("");
 
@@ -421,8 +429,8 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          token,
-          otp_entered: otp,
+          token: activeToken,
+          otp_entered: otpEntered,
           mobile: formData.phone,
           eventId: completeEventId,
           // Send conversation so the server can score without depending on
@@ -496,6 +504,17 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (otp.length !== 4) return;
+
+    // Hard-block re-entry while OTP verify is in flight.
+    if (submittingOtpRef.current) return;
+    submittingOtpRef.current = true;
+
+    await finalizeVerification(otp);
   };
 
   // Resend OTP — uses /api/otp/resend so we don't create a new registration
