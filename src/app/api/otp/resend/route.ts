@@ -16,7 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { sendWhatsAppOtp } from '@/lib/whatsapp';
-import { getWebinarConfig } from '@/lib/db';
+import { getWebinarConfig, recordOtpSendResult } from '@/lib/db';
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -60,6 +60,21 @@ export async function POST(req: NextRequest) {
     const config = await getWebinarConfig().catch(() => null);
     const whatsappTemplate = config?.whatsappTemplateName?.trim() || 'form_otp';
     const waResult = await sendWhatsAppOtp(phone, otp, whatsappTemplate);
+
+    // Record the resend outcome on the same registration row (the id rides
+    // along in the token from the original /api/otp/send). Best-effort.
+    const registrationId = typeof decoded.registrationId === 'string' ? decoded.registrationId : null;
+    if (registrationId) {
+      try {
+        await recordOtpSendResult(registrationId, {
+          whatsappStatus: waResult.status,
+          whatsappError: waResult.error,
+          whatsappMessageId: waResult.messageId ?? null,
+        });
+      } catch (err) {
+        console.error('[otp/resend] recordOtpSendResult failed:', err);
+      }
+    }
 
     // 3. Build refreshed token. Carries forward everything from the old
     // token (name, email, city, typeFilter, zoomJoinUrl, registrationId)

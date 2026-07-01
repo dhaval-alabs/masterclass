@@ -4,7 +4,7 @@ import crypto from 'crypto';
 // This route only generates + sends the OTP and builds the signed token.
 // Zoom registration is intentionally deferred to /api/otp/verify so Zoom's
 // own confirmation email only reaches users who have verified their number.
-import { findRegistrationByEmailOrPhone, getWebinarConfig } from '@/lib/db';
+import { findRegistrationByEmailOrPhone, getWebinarConfig, recordOtpSendResult } from '@/lib/db';
 import { sendWhatsAppOtp } from '@/lib/whatsapp';
 
 function requireEnv(name: string): string {
@@ -64,6 +64,23 @@ export async function POST(req: NextRequest) {
       typeof incomingRegistrationId === 'string' && incomingRegistrationId
         ? incomingRegistrationId
         : null;
+
+    // Persist the send outcome onto the lead row created in /api/lead/capture.
+    // Before this, the row stayed 'pending' forever regardless of what Meta
+    // said, which is why OTP failures were invisible. Awaited (not fire-and-
+    // forget) because the serverless function may freeze right after responding.
+    // Best-effort: a telemetry write failure must not break the user's flow.
+    if (registrationId) {
+      try {
+        await recordOtpSendResult(registrationId, {
+          whatsappStatus: waResult.status,
+          whatsappError: waResult.error,
+          whatsappMessageId: waResult.messageId ?? null,
+        });
+      } catch (err) {
+        console.error('[otp/send] recordOtpSendResult failed:', err);
+      }
+    }
 
     const token = Buffer.from(JSON.stringify({
       expiry, hmac, fullName, email, phone, city, typeFilter,

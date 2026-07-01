@@ -20,6 +20,9 @@ export interface Registration {
   // these from the row, defaulting to null if the column is null/missing).
   whatsappStatus?: string | null;
   whatsappError?: string | null;
+  // Meta message id (wamid) of the OTP send, used to correlate delivery-status
+  // webhook events (delivered / read / failed) back to this registration.
+  whatsappMessageId?: string | null;
   verifiedAt?: string | null;
   attemptNumber?: number | null;
   // Only set in the "group repeat attempts" (unique) view: how many rows
@@ -403,6 +406,7 @@ type RegistrationRow = {
   created_at: string;
   whatsapp_status?: string | null;
   whatsapp_error?: string | null;
+  whatsapp_message_id?: string | null;
   verified_at?: string | null;
   attempt_number?: number | null;
   attended?: boolean | null;
@@ -448,6 +452,7 @@ function mapRegistration(row: RegistrationRow): Registration {
     createdAt: row.created_at,
     whatsappStatus: row.whatsapp_status ?? null,
     whatsappError: row.whatsapp_error ?? null,
+    whatsappMessageId: row.whatsapp_message_id ?? null,
     verifiedAt: row.verified_at ?? null,
     attemptNumber: row.attempt_number ?? null,
     attended: row.attended ?? null,
@@ -842,6 +847,57 @@ export async function markRegistrationVerified(
   if (data) return mapRegistration(data);
   // Fallback: row not found (old token from before this refactor)
   return addRegistration(reg);
+}
+
+/**
+ * Records the OTP WhatsApp send outcome onto an existing registration row
+ * (the row is created earlier by /api/lead/capture with whatsapp_status
+ * 'pending'). Called from /api/otp/send and /api/otp/resend right after the
+ * WhatsApp API call so the admin panel and delivery webhook can see what
+ * actually happened. Only patches the fields it's given.
+ *
+ * Caller should treat failures as non-fatal (best-effort telemetry) — a write
+ * error here must never break the OTP flow for the user.
+ */
+export async function recordOtpSendResult(
+  registrationId: string,
+  result: {
+    whatsappStatus?: string | null;
+    whatsappError?: string | null;
+    whatsappMessageId?: string | null;
+  },
+): Promise<void> {
+  const patch: Record<string, unknown> = {};
+  if (result.whatsappStatus    !== undefined) patch.whatsapp_status     = result.whatsappStatus;
+  if (result.whatsappError     !== undefined) patch.whatsapp_error      = result.whatsappError;
+  if (result.whatsappMessageId !== undefined) patch.whatsapp_message_id = result.whatsappMessageId;
+  if (Object.keys(patch).length === 0) return;
+  const { error } = await client()
+    .from('registrations')
+    .update(patch)
+    .eq('id', registrationId);
+  if (error) throw error;
+}
+
+/**
+ * Updates OTP delivery telemetry by the Meta message id (wamid) captured at
+ * send time. Used by the WhatsApp status webhook to flip whatsapp_status to
+ * 'delivered' / 'read' / 'failed' — and, on failure, to record Meta's error
+ * code so we can tell a billing/verification block apart from a bad number.
+ * No-op (matches zero rows) if the wamid belongs to a campaign send rather
+ * than an OTP, so it's safe to call for every status event.
+ */
+export async function updateOtpDeliveryByMessageId(
+  metaMessageId: string,
+  updates: { whatsappStatus: string; whatsappError?: string | null },
+): Promise<void> {
+  const patch: Record<string, unknown> = { whatsapp_status: updates.whatsappStatus };
+  if (updates.whatsappError !== undefined) patch.whatsapp_error = updates.whatsappError;
+  const { error } = await client()
+    .from('registrations')
+    .update(patch)
+    .eq('whatsapp_message_id', metaMessageId);
+  if (error) throw error;
 }
 
 export async function updateLeadScore(
@@ -3252,11 +3308,12 @@ export async function bulkCreateWhatsAppSendLog(entries: WaSendLogEntry[]): Prom
 
 export async function updateWhatsAppSendLogByMessageId(
   metaMessageId: string,
-  updates: { status: 'delivered' | 'read'; deliveredAt?: string; readAt?: string },
+  updates: { status: 'delivered' | 'read' | 'failed'; deliveredAt?: string; readAt?: string; errorDetail?: string | null },
 ): Promise<void> {
   const row: Record<string, unknown> = { status: updates.status };
   if (updates.deliveredAt !== undefined) row.delivered_at = updates.deliveredAt;
   if (updates.readAt      !== undefined) row.read_at      = updates.readAt;
+  if (updates.errorDetail !== undefined) row.error_detail = updates.errorDetail;
   const { error } = await client()
     .schema('excel_to_ai')
     .from('whatsapp_send_log')
