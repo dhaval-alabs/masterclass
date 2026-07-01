@@ -55,6 +55,7 @@ export async function PATCH(
         whatsappTemplateName: body.whatsappTemplateName,
         lsqSourceName: body.lsqSourceName,
         metaEventSuffix: body.metaEventSuffix,
+        otpRequired: body.otpRequired,
       });
       return NextResponse.json({ session });
     }

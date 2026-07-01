@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse, after } from 'next/server';
 import crypto from 'crypto';
 import fs from 'fs';
-import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation, scheduleWhatsAppForRecipient, cancelPendingScheduledWhatsApp } from '@/lib/db';
+import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation, scheduleWhatsAppForRecipient, cancelPendingScheduledWhatsApp, getWebinarConfig } from '@/lib/db';
 import { registerWebinarParticipant } from '@/lib/zoom';
 import { scoreAndSave, type ConversationTurn } from '@/lib/qualify';
 
@@ -53,27 +53,42 @@ export async function POST(req: NextRequest) {
     console.log('[verify] conversation received — turns:', conversation.length, '| raw type:', typeof incomingConversation, '| isArray:', Array.isArray(incomingConversation));
     debugLog(`[verify] POST received — conversation turns=${conversation.length} rawType=${typeof incomingConversation} isArray=${Array.isArray(incomingConversation)} bodyKeys=${Object.keys(body).join(',')}`);
 
-    if (!token || !otp_entered) {
+    if (!token) {
       return NextResponse.json({ success: false, error: 'Missing parameters' }, { status: 400 });
     }
 
-    const hmacSecret = requireEnv('OTP_HMAC_SECRET');
-    if (hmacSecret.length < 32) throw new Error('OTP_HMAC_SECRET must be at least 32 chars');
+    // Whether this session requires OTP is decided SERVER-SIDE here (never
+    // trusted from the client/token), so a session that still requires OTP
+    // can't be bypassed by a forged request. When the admin has turned OTP off
+    // for the active session, skip the expiry + HMAC checks and finalize the
+    // registration directly. Defaults to requiring OTP if config can't be read.
+    const config = await getWebinarConfig().catch(() => null);
+    const otpRequired = config?.otpRequired !== false;
+
+    if (otpRequired && !otp_entered) {
+      return NextResponse.json({ success: false, error: 'Missing parameters' }, { status: 400 });
+    }
+
     const decoded = JSON.parse(Buffer.from(token, 'base64').toString('utf8'));
     const { expiry, hmac, fullName, email, phone, city, zoomWebinarId, registrationId } = decoded;
 
-    console.log('[verify] token decoded — registrationId:', registrationId ?? 'NULL', '| email:', email);
-    debugLog(`[verify] token decoded — registrationId=${registrationId ?? 'NULL'} email=${email}`);
+    console.log('[verify] token decoded — registrationId:', registrationId ?? 'NULL', '| email:', email, '| otpRequired:', otpRequired);
+    debugLog(`[verify] token decoded — registrationId=${registrationId ?? 'NULL'} email=${email} otpRequired=${otpRequired}`);
 
-    // 1. Check Expiry
-    if (Date.now() > expiry) {
-      return NextResponse.json({ success: false, error: 'OTP expired' }, { status: 400 });
-    }
+    if (otpRequired) {
+      const hmacSecret = requireEnv('OTP_HMAC_SECRET');
+      if (hmacSecret.length < 32) throw new Error('OTP_HMAC_SECRET must be at least 32 chars');
 
-    // 2. Validate HMAC
-    const expectedHmac = crypto.createHmac('sha256', hmacSecret).update(`${phone}:${otp_entered}:${expiry}`).digest('hex');
-    if (hmac !== expectedHmac) {
-      return NextResponse.json({ success: false, error: 'Invalid OTP' }, { status: 400 });
+      // 1. Check Expiry
+      if (Date.now() > expiry) {
+        return NextResponse.json({ success: false, error: 'OTP expired' }, { status: 400 });
+      }
+
+      // 2. Validate HMAC
+      const expectedHmac = crypto.createHmac('sha256', hmacSecret).update(`${phone}:${otp_entered}:${expiry}`).digest('hex');
+      if (hmac !== expectedHmac) {
+        return NextResponse.json({ success: false, error: 'Invalid OTP' }, { status: 400 });
+      }
     }
 
     // 3. Update External Systems
