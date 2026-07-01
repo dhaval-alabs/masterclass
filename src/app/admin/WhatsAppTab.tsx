@@ -328,21 +328,66 @@ function LogStatusDot({ status }: { status: WaSendLog["status"] }) {
   return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${map[status] ?? "bg-slate-300"}`} />;
 }
 
-// ── Simulation Modal ──────────────────────────────────────────────────────────
-function SimulationModal({ data, onClose }: { data: SimulateResult; onClose: () => void }) {
+// Phone identity key — last 10 digits, so +91 / formatting differences collapse.
+const phoneKey = (p: string) => (p || "").replace(/\D/g, "").slice(-10);
+
+// ── Recipient picker modal ────────────────────────────────────────────────────
+// Lists the audience's recipients (those with a phone) with a checkbox each, so
+// the admin can hand-pick a subset to broadcast to (e.g. only people whose OTP
+// failed). Confirming with everyone selected clears the manual selection — the
+// parent treats `null` as "send to the whole audience".
+function SimulationModal({
+  data,
+  initialSelected,
+  onConfirm,
+  onClose,
+}: {
+  data: SimulateResult;
+  initialSelected: Set<string> | null;
+  onConfirm: (selection: Set<string> | null) => void;
+  onClose: () => void;
+}) {
+  const allKeys = data.recipients.map(r => phoneKey(r.phone)).filter(Boolean);
+  const [draft, setDraft] = useState<Set<string>>(
+    () => (initialSelected ? new Set(initialSelected) : new Set(allKeys)),
+  );
   const [search, setSearch] = useState("");
   const q = search.toLowerCase();
   const filtered = q
     ? data.recipients.filter(r => r.name.toLowerCase().includes(q) || r.phone.includes(q) || r.email.toLowerCase().includes(q))
     : data.recipients;
 
+  const toggle = (key: string) =>
+    setDraft(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+
+  const filteredKeys = filtered.map(r => phoneKey(r.phone)).filter(Boolean);
+  const allFilteredSelected = filteredKeys.length > 0 && filteredKeys.every(k => draft.has(k));
+  const toggleAllFiltered = () =>
+    setDraft(prev => {
+      const next = new Set(prev);
+      if (allFilteredSelected) filteredKeys.forEach(k => next.delete(k));
+      else filteredKeys.forEach(k => next.add(k));
+      return next;
+    });
+
+  const confirm = () => {
+    // Everyone selected → "whole audience" (null), so the composer shows no
+    // manual-selection banner and scheduling stays available.
+    onConfirm(draft.size >= allKeys.length ? null : new Set(draft));
+    onClose();
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
           <div>
-            <h3 className="font-bold text-[#003368]">Recipient simulation</h3>
+            <h3 className="font-bold text-[#003368]">Choose recipients</h3>
             <p className="text-xs text-slate-500 mt-0.5">
               {data.withPhone} of {data.totalCount} have phone numbers
               {data.sessionCode && <span className="ml-1 font-semibold text-[#003368]">· {data.sessionCode}</span>}
@@ -353,22 +398,13 @@ function SimulationModal({ data, onClose }: { data: SimulateResult; onClose: () 
           </button>
         </div>
 
-        {/* Stats bar */}
-        <div className="flex gap-4 px-6 py-3 border-b border-slate-100 bg-slate-50">
-          <div className="text-center">
-            <p className="text-lg font-extrabold text-[#003368]">{data.withPhone}</p>
-            <p className="text-[10px] text-slate-400 font-semibold uppercase">Will receive</p>
-          </div>
-          <div className="w-px bg-slate-200" />
-          <div className="text-center">
-            <p className="text-lg font-extrabold text-amber-600">{data.totalCount - data.withPhone}</p>
-            <p className="text-[10px] text-slate-400 font-semibold uppercase">No phone</p>
-          </div>
-          <div className="w-px bg-slate-200" />
-          <div className="text-center">
-            <p className="text-lg font-extrabold text-slate-600">{data.totalCount}</p>
-            <p className="text-[10px] text-slate-400 font-semibold uppercase">Total</p>
-          </div>
+        {/* Select-all + count bar */}
+        <div className="flex items-center justify-between px-6 py-3 border-b border-slate-100 bg-slate-50">
+          <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer select-none">
+            <input type="checkbox" checked={allFilteredSelected} onChange={toggleAllFiltered} className="w-4 h-4 accent-[#00875A]" />
+            {q ? `Select ${filteredKeys.length} shown` : "Select all"}
+          </label>
+          <p className="text-xs text-slate-500"><span className="font-bold text-[#003368]">{draft.size}</span> selected</p>
         </div>
 
         {/* Search */}
@@ -390,22 +426,36 @@ function SimulationModal({ data, onClose }: { data: SimulateResult; onClose: () 
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
           {filtered.length === 0 ? (
             <p className="text-center text-slate-400 text-sm py-8">No matches.</p>
-          ) : filtered.map((r, i) => (
-            <div key={i} className="flex items-center gap-3 px-6 py-2.5">
-              <div className="w-7 h-7 rounded-full bg-[#25D366]/15 flex items-center justify-center text-[10px] font-bold text-[#1da851] shrink-0">
-                {r.name?.charAt(0)?.toUpperCase() ?? "?"}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-slate-700 truncate">{r.name}</p>
-                <p className="text-[11px] text-slate-400 truncate">{r.email}</p>
-              </div>
-              <p className="text-xs font-mono text-slate-600 shrink-0">+91 {r.phone}</p>
-            </div>
-          ))}
+          ) : filtered.map((r, i) => {
+            const key = phoneKey(r.phone);
+            return (
+              <label key={i} className="flex items-center gap-3 px-6 py-2.5 cursor-pointer hover:bg-slate-50">
+                <input type="checkbox" checked={draft.has(key)} onChange={() => toggle(key)} className="w-4 h-4 accent-[#00875A] shrink-0" />
+                <div className="w-7 h-7 rounded-full bg-[#25D366]/15 flex items-center justify-center text-[10px] font-bold text-[#1da851] shrink-0">
+                  {r.name?.charAt(0)?.toUpperCase() ?? "?"}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-slate-700 truncate">{r.name}</p>
+                  <p className="text-[11px] text-slate-400 truncate">{r.email}</p>
+                </div>
+                <p className="text-xs font-mono text-slate-600 shrink-0">+91 {r.phone}</p>
+              </label>
+            );
+          })}
         </div>
 
-        <div className="px-6 py-3 border-t border-slate-100 text-[11px] text-slate-400 text-right">
-          Showing {filtered.length} of {data.recipients.length} recipients with phone numbers
+        {/* Footer */}
+        <div className="flex items-center justify-between gap-3 px-6 py-3 border-t border-slate-200">
+          <button onClick={onClose} className="text-sm font-semibold text-slate-500 hover:text-slate-700 px-3 py-2 rounded-lg">
+            Cancel
+          </button>
+          <button
+            onClick={confirm}
+            disabled={draft.size === 0}
+            className="text-sm font-bold text-white bg-[#00875A] hover:bg-[#00734d] disabled:opacity-40 px-4 py-2 rounded-lg"
+          >
+            {draft.size >= allKeys.length ? "Send to everyone" : `Use ${draft.size} selected`}
+          </button>
         </div>
       </div>
     </div>
@@ -450,6 +500,10 @@ export default function WhatsAppTab() {
   const [showSimulation, setShowSimulation]           = useState(false);
   const [simulationData, setSimulationData]           = useState<SimulateResult | null>(null);
   const [isLoadingSimulation, setIsLoadingSimulation] = useState(false);
+
+  // Manual recipient selection: null = send to the whole audience; a Set of
+  // phone keys (last-10 digits) = only the recipients hand-picked in the modal.
+  const [selectedPhones, setSelectedPhones] = useState<Set<string> | null>(null);
 
   // Daily limit
   const [dailyCount, setDailyCount] = useState<number | null>(null);
@@ -580,6 +634,8 @@ export default function WhatsAppTab() {
   }, []);
 
   useEffect(() => { loadPreview(audience); }, [audience, loadPreview]);
+  // Switching audience changes the recipient pool, so drop any manual selection.
+  useEffect(() => { setSelectedPhones(null); }, [audience]);
   useEffect(() => { loadCampaigns(); loadDailyCount(); loadOptouts(); }, [loadCampaigns, loadDailyCount, loadOptouts]);
 
   // Auto-refresh logs for an expanded campaign that is still sending (queue
@@ -657,13 +713,24 @@ export default function WhatsAppTab() {
       }
       scheduledForIso = when.toISOString();
     }
+    // Manual selection → send only to the hand-picked phones. Can't be combined
+    // with scheduling (the cron recomputes the audience and doesn't persist the list).
+    const manualPhones = selectedPhones ? [...selectedPhones] : null;
+    if (manualPhones && manualPhones.length === 0) {
+      setSendResult({ kind: "err", text: "No recipients selected. Choose at least one, or clear the selection to send to the whole audience." });
+      return;
+    }
+    if (manualPhones && scheduleEnabled) {
+      setSendResult({ kind: "err", text: "A manual recipient selection can't be scheduled. Send now, or clear the selection to schedule the whole audience." });
+      return;
+    }
     setIsSending(true);
     setSendResult(null);
     try {
       const res = await fetch("/api/admin/whatsapp/campaigns", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateName, languageCode, audience, variables, headerImageUrl, scheduledFor: scheduledForIso }),
+        body: JSON.stringify({ templateName, languageCode, audience, variables, headerImageUrl, scheduledFor: scheduledForIso, recipientPhones: manualPhones ?? undefined }),
       });
       const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -673,6 +740,7 @@ export default function WhatsAppTab() {
       if (data.success) {
         setTemplateName(""); setVariables([""]); setHeaderImageUrl(""); setSelectedTemplate(null);
         setScheduleEnabled(false); setScheduleFor("");
+        setSelectedPhones(null);
       }
       loadCampaigns();
       loadDailyCount();
@@ -892,7 +960,12 @@ export default function WhatsAppTab() {
     <div className="max-w-5xl space-y-8">
 
       {showSimulation && simulationData && (
-        <SimulationModal data={simulationData} onClose={() => setShowSimulation(false)} />
+        <SimulationModal
+          data={simulationData}
+          initialSelected={selectedPhones}
+          onConfirm={setSelectedPhones}
+          onClose={() => setShowSimulation(false)}
+        />
       )}
 
       <div>
@@ -1208,7 +1281,7 @@ export default function WhatsAppTab() {
             <button type="button" onClick={loadSimulation} disabled={isLoadingSimulation}
               className="flex items-center gap-2 bg-white border border-slate-200 hover:border-slate-300 text-slate-700 font-semibold py-2.5 px-4 rounded-lg text-sm transition-all disabled:opacity-60">
               {isLoadingSimulation ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
-              Simulate
+              {selectedPhones ? `Choose recipients (${selectedPhones.size})` : "Choose recipients"}
             </button>
             {sendResult && (
               <div className={`text-sm font-semibold flex items-center gap-1.5 ${sendResult.kind === "ok" ? "text-[#00875A]" : sendResult.kind === "warn" ? "text-amber-700" : "text-red-600"}`}>
@@ -1218,6 +1291,15 @@ export default function WhatsAppTab() {
               </div>
             )}
           </div>
+
+          {selectedPhones && (
+            <div className="mt-3 flex items-center gap-2 text-sm bg-[#00DF83]/10 border border-[#00DF83]/30 text-[#00875A] rounded-lg px-3 py-2 max-w-xl">
+              <Phone className="w-4 h-4 shrink-0" />
+              <span className="font-semibold">Broadcasting to {selectedPhones.size} hand-picked {selectedPhones.size === 1 ? "recipient" : "recipients"}</span>
+              <span className="text-slate-400">· from the {audience} pool</span>
+              <button type="button" onClick={() => setSelectedPhones(null)} className="ml-auto text-xs font-bold text-slate-500 hover:text-red-600 underline">Clear</button>
+            </div>
+          )}
         </div>
 
         {/* ── Right panel ────────────────────────────────────────────── */}
@@ -1233,7 +1315,7 @@ export default function WhatsAppTab() {
               <button onClick={loadSimulation} disabled={isLoadingSimulation}
                 className="flex items-center gap-1 text-xs text-[#003368] font-semibold hover:underline disabled:opacity-50">
                 {isLoadingSimulation ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
-                Simulate
+                Choose
               </button>
             </div>
             {isLoadingPreview ? (

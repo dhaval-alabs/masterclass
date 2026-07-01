@@ -21,13 +21,16 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  let body: { templateName?: string; languageCode?: string; audience?: string; variables?: string[]; headerImageUrl?: string; scheduledFor?: string };
+  let body: { templateName?: string; languageCode?: string; audience?: string; variables?: string[]; headerImageUrl?: string; scheduledFor?: string; recipientPhones?: string[] };
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
   const { templateName, languageCode = 'en_US', audience, variables = [] } = body;
   const headerImageUrl = body.headerImageUrl?.trim() || null;
+  // Optional manual selection: a subset of phone numbers hand-picked in the UI.
+  // When present, the audience only defines the pool and we narrow it to these.
+  const recipientPhones = Array.isArray(body.recipientPhones) ? body.recipientPhones : null;
   if (!templateName?.trim()) return NextResponse.json({ error: 'templateName is required' }, { status: 400 });
 
   const validAudiences = ['verified', 'unverified', 'all'] as const;
@@ -49,6 +52,16 @@ export async function POST(req: NextRequest) {
     scheduledFor = when.toISOString();
   }
 
+  // A hand-picked subset can't be scheduled: the cron recomputes the audience
+  // at fire time and we don't persist the chosen phone list. Send it now, or
+  // clear the selection to schedule the whole audience.
+  if (scheduledFor && recipientPhones && recipientPhones.length) {
+    return NextResponse.json(
+      { error: "A manual recipient selection can't be scheduled — send it now, or clear the selection to schedule the whole audience." },
+      { status: 400 },
+    );
+  }
+
   const broadcastCreds = getBroadcastCreds();
   const configured = !!broadcastCreds.waAccessToken && !!broadcastCreds.waPhoneId;
 
@@ -56,7 +69,16 @@ export async function POST(req: NextRequest) {
     const session    = await getActiveWebinarSession();
     const allRecipients = await getEmailRecipients(aud, session?.id ?? null);
     // Only include recipients with a phone number.
-    const recipients = allRecipients.filter(r => r.phone?.trim());
+    let recipients = allRecipients.filter(r => r.phone?.trim());
+
+    // Manual selection: narrow the audience pool to the hand-picked phones
+    // (matched on the last 10 digits, ignoring +91 / formatting differences).
+    if (recipientPhones && recipientPhones.length) {
+      const pick = new Set(
+        recipientPhones.map(p => (p || '').replace(/\D/g, '').slice(-10)).filter(Boolean),
+      );
+      recipients = recipients.filter(r => pick.has((r.phone || '').replace(/\D/g, '').slice(-10)));
+    }
 
     if (!configured) {
       const campaign = await createWhatsAppCampaign({
