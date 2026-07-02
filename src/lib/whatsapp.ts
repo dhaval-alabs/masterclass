@@ -30,8 +30,9 @@ export type WhatsAppSendResult = {
  * vars are set, otherwise falls back to the OTP number's credentials so
  * existing behaviour is unchanged.
  *
- * OTP (sendWhatsAppOtp) deliberately stays on META_WA_* and does NOT use this,
- * so marketing volume / quality-rating issues can never affect OTP delivery.
+ * OTP no longer uses these credentials at all — it's delivered via the xBot
+ * webhook (see sendWhatsAppOtp), so marketing volume / quality-rating issues
+ * on the broadcast number can never affect OTP delivery.
  */
 export function getBroadcastCreds(): {
   waAccessToken: string | undefined;
@@ -84,66 +85,71 @@ export function listWaNumbers(): { key: WaNumberKey; label: string; configured: 
   ];
 }
 
-export async function sendWhatsAppOtp(
-  phone: string,
-  otp: string,
-  templateName: string,
-): Promise<WhatsAppSendResult> {
-  const waAccessToken = process.env.META_WA_ACCESS_TOKEN;
-  const waPhoneId = process.env.META_WA_PHONE_NUMBER_ID;
-  if (!waAccessToken || !waPhoneId) {
-    return { status: 'skipped', error: 'Meta WA env vars not configured' };
-  }
+/**
+ * Sends the WhatsApp OTP via the xBot inbound webhook (chat-xbot.webspecia.in),
+ * per XBOT_OTP_INTEGRATION_GUIDE.md.
+ *
+ * We route through xBot instead of calling Meta's Graph API directly because
+ * xBot holds a managed, always-valid access token and a healthy sender number,
+ * so OTP delivery keeps working even when this project's own Meta WABA has a
+ * billing / verification block (which is what broke direct delivery). The OTP
+ * code itself is still generated and HMAC-signed by us (see /api/otp/send);
+ * xBot only delivers the message.
+ *
+ * Contract is unchanged so /api/otp/send + /api/otp/resend + telemetry keep
+ * working. xBot doesn't expose a Meta message id, so messageId is always null.
+ */
+export async function sendWhatsAppOtp(params: {
+  phone: string;            // 10-digit mobile, no country code
+  otp: string;
+  fullName?: string | null;
+  email?: string | null;
+  city?: string | null;
+  countryCode?: string;     // dialing code with '+', defaults to '+91'
+}): Promise<WhatsAppSendResult> {
+  const { phone, otp } = params;
+  const countryCode = params.countryCode || '+91';
+  const webhookUrl = process.env.XBOT_OTP_WEBHOOK_URL
+    || 'https://chat-xbot.webspecia.in/api/iwh/08c86dc50ec3914c2fdf14a39ab3acb8';
+
+  // xBot expects urlencoded form fields (see the integration guide).
+  const form = new URLSearchParams();
+  form.set('Name', params.fullName ?? '');
+  form.set('mobile', phone);                       // 10 digits only
+  form.set('email', params.email ?? '');
+  form.set('city', params.city ?? '');
+  form.set('countryCode', countryCode);            // e.g. "+91"
+  form.set('mobilecc', `${countryCode}${phone}`);  // e.g. "+918128181213"
+  form.set('otp', otp);
+  form.set('status', 'not varified');              // xBot's required (misspelled) value
 
   try {
-    const waRes = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${waPhoneId}/messages`, {
+    const res = await fetch(webhookUrl, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${waAccessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: `91${phone}`,
-        type: 'template',
-        template: {
-          name: templateName,
-          language: { code: 'en_US' },
-          components: [{ type: 'body', parameters: [{ type: 'text', text: otp }] }],
-        },
-      }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+      // Keep the OTP step snappy — fall back gracefully if xBot is slow.
+      signal: AbortSignal.timeout(8000),
     });
 
-    if (waRes.ok) {
-      // Capture Meta's message id (wamid) so the delivery-status webhook can
-      // later attach delivered / read / failed telemetry to this registration.
-      // NOTE: a 200 here means Meta ACCEPTED the message, not that it was
-      // delivered — the webhook is what tells us if delivery actually failed.
-      let messageId: string | null = null;
+    if (res.ok) {
+      // xBot returns { status: 'ok' } on success. A 2xx carrying an explicit
+      // non-ok status is treated as a failure; a non-JSON 2xx is accepted.
+      let ok = true;
       try {
-        const data = await waRes.json() as { messages?: { id: string }[] };
-        messageId = data?.messages?.[0]?.id ?? null;
-      } catch { /* body not JSON — leave messageId null */ }
-      return { status: 'sent', error: null, messageId };
+        const data = await res.json() as { status?: string };
+        if (data && typeof data.status === 'string') ok = data.status === 'ok';
+      } catch { /* non-JSON 2xx — assume accepted */ }
+      if (ok) return { status: 'sent', error: null, messageId: null };
+      return { status: 'api_failed', error: 'xBot returned a non-ok status', messageId: null };
     }
 
-    // Capture Meta's specific error message + code for telemetry.
-    let detail = `HTTP ${waRes.status}`;
-    try {
-      const body = await waRes.json();
-      const err = body?.error;
-      if (err) {
-        const code = err.code ?? '?';
-        const msg = err.message ?? 'unknown';
-        const subCode = err.error_subcode ? ` (subcode ${err.error_subcode})` : '';
-        detail = `code=${code}${subCode}: ${msg}`;
-      }
-    } catch {
-      // Body wasn't JSON — keep the HTTP status.
-    }
-    console.error('[WhatsApp] Send failed:', detail);
-    return { status: 'api_failed', error: detail };
+    console.error('[WhatsApp OTP xBot] send failed: HTTP', res.status);
+    return { status: 'api_failed', error: `xBot HTTP ${res.status}`, messageId: null };
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'unknown network error';
-    console.error('[WhatsApp] Network error:', err);
-    return { status: 'api_failed', error: detail };
+    console.error('[WhatsApp OTP xBot] request failed:', detail);
+    return { status: 'api_failed', error: detail, messageId: null };
   }
 }
 
