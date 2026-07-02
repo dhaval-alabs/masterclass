@@ -58,11 +58,10 @@ export async function POST(req: NextRequest) {
     // can't bypass a session that still requires OTP.
     const otpRequired = config?.otpRequired !== false;
 
-    // Send WhatsApp OTP
-    const whatsappTemplate = config?.whatsappTemplateName?.trim() || 'form_otp';
+    // Send WhatsApp OTP via xBot (delivers the code we generated + signed).
     const zoomWebinarId = config?.zoomWebinarId?.trim() || null;
     const waResult = otpRequired
-      ? await sendWhatsAppOtp(phone, otp, whatsappTemplate)
+      ? await sendWhatsAppOtp({ phone, otp, fullName, email, city })
       : { status: 'skipped' as const, error: null, messageId: null };
     const waSuccess = waResult.status === 'sent';
 

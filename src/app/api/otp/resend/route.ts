@@ -16,7 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { sendWhatsAppOtp } from '@/lib/whatsapp';
-import { getWebinarConfig, recordOtpSendResult } from '@/lib/db';
+import { recordOtpSendResult } from '@/lib/db';
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -56,10 +56,12 @@ export async function POST(req: NextRequest) {
     const expiry = Date.now() + 10 * 60 * 1000;
     const hmac = crypto.createHmac('sha256', hmacSecret).update(`${phone}:${otp}:${expiry}`).digest('hex');
 
-    // 2. WhatsApp send (uses the admin-configurable template name).
-    const config = await getWebinarConfig().catch(() => null);
-    const whatsappTemplate = config?.whatsappTemplateName?.trim() || 'form_otp';
-    const waResult = await sendWhatsAppOtp(phone, otp, whatsappTemplate);
+    // 2. Deliver the fresh code via xBot. Lead context (name/email/city) rides
+    // along in the token minted by the original /api/otp/send.
+    const fullName = typeof decoded.fullName === 'string' ? decoded.fullName : '';
+    const email    = typeof decoded.email === 'string' ? decoded.email : '';
+    const city     = typeof decoded.city === 'string' ? decoded.city : '';
+    const waResult = await sendWhatsAppOtp({ phone, otp, fullName, email, city });
 
     // Record the resend outcome on the same registration row (the id rides
     // along in the token from the original /api/otp/send). Best-effort.
