@@ -1,7 +1,9 @@
 // components/ThankYouPage.tsx
 'use client';
 
-import { useEffect } from 'react';
+// GOOGLE ADS — DISABLED: the only consumer of useEffect here was the
+// commented-out Google Ads conversion block below. See marker there.
+// import { useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 
@@ -118,6 +120,17 @@ export default function ThankYouPage({ heading: headingProp, subCopy: subCopyPro
   const courseBrochureUrl = courseSlug ? COURSE_BROCHURE_URLS[courseSlug] || null : null;
   const courseDisplayName = courseSlug ? COURSE_DISPLAY_NAMES[courseSlug] || '' : '';
 
+  // ────────────────────────────────────────────────────────────
+  // GOOGLE ADS — DISABLED (commented out, not deleted)
+  // This app is Meta-only for now. This code was inherited from the
+  // careersuccess (Google Ads) fork and is currently inert (env vars
+  // unset in production). Commented out rather than removed so Google
+  // Ads support can be re-enabled quickly if this campaign is ever
+  // extended to Google Ads. Do not uncomment without confirming the
+  // relevant AW-.../label conversion action is correctly configured
+  // and intended for THIS app specifically.
+  // ────────────────────────────────────────────────────────────
+  /*
   // gtag client-side conversion — PRIMARY signal for Google Ads dashboard + Smart Bidding.
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -145,6 +158,7 @@ export default function ThankYouPage({ heading: headingProp, subCopy: subCopyPro
       });
     }
   }, [conversionId, verifiedConversionId, email, name, isVerified]);
+  */
 
   return (
     <div style={{ minHeight: '100vh', background: '#f0faf8', paddingBottom: '40px' }}>
