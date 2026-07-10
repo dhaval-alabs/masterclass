@@ -87,9 +87,14 @@ export async function registerWebinarParticipant(
   input: ZoomRegistrantInput
 ): Promise<ZoomRegistrationResult> {
   try {
-    const webinarId = input.webinarId?.trim() || requireEnv('ZOOM_WEBINAR_ID');
+    // Zoom shows IDs with spaces ("833 7267 0921") and admins paste them that
+    // way. The API needs digits only, so strip every non-digit before use —
+    // otherwise a spaced ID fails the regex below and silently blocks EVERY
+    // registration (which is exactly how this broke once).
+    const rawWebinarId = input.webinarId?.trim() || requireEnv('ZOOM_WEBINAR_ID');
+    const webinarId = rawWebinarId.replace(/\D/g, '');
     if (!/^\d{9,12}$/.test(webinarId)) {
-      return { ok: false, error: `Zoom webinar ID looks invalid (expected 9-12 digits): ${webinarId}` };
+      return { ok: false, error: `Zoom webinar ID looks invalid (expected 9-12 digits): ${rawWebinarId}` };
     }
 
     // Zoom rejects empty first_name with a confusing error.
@@ -103,7 +108,10 @@ export async function registerWebinarParticipant(
     const payload: Record<string, string> = {
       email: input.email,
       first_name: firstName,
-      last_name: (input.lastName || '').trim(),
+      // Some webinars mark last_name as a REQUIRED registration field, which
+      // rejects single-word names (empty last_name) with a 400. Fall back to a
+      // placeholder so mononym registrants still get registered + emailed.
+      last_name: (input.lastName || '').trim() || '.',
     };
     const normalizedPhone = normalizePhone(input.phone);
     if (normalizedPhone) payload.phone = normalizedPhone;
@@ -177,9 +185,11 @@ export async function fetchWebinarAttendees(
   webinarId?: string | null,
 ): Promise<ZoomAttendeesResult> {
   try {
-    const id = webinarId?.trim() || requireEnv('ZOOM_WEBINAR_ID');
+    // Strip non-digits — admins paste spaced IDs like "833 7267 0921".
+    const rawId = webinarId?.trim() || requireEnv('ZOOM_WEBINAR_ID');
+    const id = rawId.replace(/\D/g, '');
     if (!/^\d{9,12}$/.test(id)) {
-      return { ok: false, error: `Zoom webinar ID looks invalid (expected 9-12 digits): ${id}` };
+      return { ok: false, error: `Zoom webinar ID looks invalid (expected 9-12 digits): ${rawId}` };
     }
 
     const token = await getZoomAccessToken();
