@@ -1,17 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
 // Lead capture (DB / LSQ / Sheets) now happens in /api/lead/capture at form-submit time.
-// This route only generates + sends the OTP and builds the signed token.
+// This route asks the shared WABA OTP service to send a code and builds the
+// lead-context token. The code is generated + delivered + verified entirely by
+// that service — we no longer mint or HMAC the OTP ourselves.
 // Zoom registration is intentionally deferred to /api/otp/verify so Zoom's
 // own confirmation email only reaches users who have verified their number.
 import { findRegistrationByEmailOrPhone, getWebinarConfig, recordOtpSendResult } from '@/lib/db';
-import { sendWhatsAppOtp } from '@/lib/whatsapp';
-
-function requireEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing required env var: ${name}`);
-  return v;
-}
+import { sendOtpCode } from '@/lib/otpService';
 
 export async function POST(req: NextRequest) {
   try {
@@ -45,25 +40,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Generate OTP & HMAC
-    const otp = String(crypto.randomInt(1000, 9999));
-    const expiry = Date.now() + 10 * 60 * 1000;
-    const hmacSecret = requireEnv('OTP_HMAC_SECRET');
-    if (hmacSecret.length < 32) throw new Error('OTP_HMAC_SECRET must be at least 32 chars');
-    const hmac = crypto.createHmac('sha256', hmacSecret).update(`${phone}:${otp}:${expiry}`).digest('hex');
-
     // OTP requirement is per-session (admin toggle). When disabled, skip the
-    // WhatsApp call entirely — the client finalizes registration directly via
+    // OTP send entirely — the client finalizes registration directly via
     // /api/otp/verify, which re-checks otpRequired server-side so a client
     // can't bypass a session that still requires OTP.
     const otpRequired = config?.otpRequired !== false;
 
-    // Send WhatsApp OTP via xBot (delivers the code we generated + signed).
+    // Ask the WABA OTP service to generate + WhatsApp the code (area "PPC").
     const zoomWebinarId = config?.zoomWebinarId?.trim() || null;
-    const waResult = otpRequired
-      ? await sendWhatsAppOtp({ phone, otp, fullName, email, city })
-      : { status: 'skipped' as const, error: null, messageId: null };
-    const waSuccess = waResult.status === 'sent';
+    const otpSend = otpRequired
+      ? await sendOtpCode(phone)
+      : { ok: true, error: null };
+    const waSuccess = otpSend.ok;
 
     // registrationId comes from /api/lead/capture (step 1); embed in token so
     // /api/otp/verify can promote the same DB row to Verified.
@@ -80,17 +68,19 @@ export async function POST(req: NextRequest) {
     if (registrationId) {
       try {
         await recordOtpSendResult(registrationId, {
-          whatsappStatus: otpRequired ? waResult.status : 'otp_disabled',
-          whatsappError: waResult.error,
-          whatsappMessageId: waResult.messageId ?? null,
+          whatsappStatus: otpRequired ? (otpSend.ok ? 'sent' : 'failed') : 'otp_disabled',
+          whatsappError: otpSend.error,
+          whatsappMessageId: null,
         });
       } catch (err) {
         console.error('[otp/send] recordOtpSendResult failed:', err);
       }
     }
 
+    // Token carries lead context only — the WABA service owns the code + its
+    // verification, so there is no OTP/HMAC/expiry to embed anymore.
     const token = Buffer.from(JSON.stringify({
-      expiry, hmac, fullName, email, phone, city, typeFilter,
+      fullName, email, phone, city, typeFilter,
       zoomWebinarId,
       registrationId,
     })).toString('base64');

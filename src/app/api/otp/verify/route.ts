@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation, scheduleWhatsAppForRecipient, cancelPendingScheduledWhatsApp, getWebinarConfig } from '@/lib/db';
 import { registerWebinarParticipant } from '@/lib/zoom';
+import { verifyOtpCode } from '@/lib/otpService';
 import { scoreAndSave, type ConversationTurn } from '@/lib/qualify';
 
 // Diagnostic: append a line to a temp file so scoring issues can be traced
@@ -70,24 +71,21 @@ export async function POST(req: NextRequest) {
     }
 
     const decoded = JSON.parse(Buffer.from(token, 'base64').toString('utf8'));
-    const { expiry, hmac, fullName, email, phone, city, zoomWebinarId, registrationId } = decoded;
+    const { fullName, email, phone, city, zoomWebinarId, registrationId } = decoded;
 
     console.log('[verify] token decoded — registrationId:', registrationId ?? 'NULL', '| email:', email, '| otpRequired:', otpRequired);
     debugLog(`[verify] token decoded — registrationId=${registrationId ?? 'NULL'} email=${email} otpRequired=${otpRequired}`);
 
     if (otpRequired) {
-      const hmacSecret = requireEnv('OTP_HMAC_SECRET');
-      if (hmacSecret.length < 32) throw new Error('OTP_HMAC_SECRET must be at least 32 chars');
-
-      // 1. Check Expiry
-      if (Date.now() > expiry) {
-        return NextResponse.json({ success: false, error: 'OTP expired' }, { status: 400 });
-      }
-
-      // 2. Validate HMAC
-      const expectedHmac = crypto.createHmac('sha256', hmacSecret).update(`${phone}:${otp_entered}:${expiry}`).digest('hex');
-      if (hmac !== expectedHmac) {
-        return NextResponse.json({ success: false, error: 'Invalid OTP' }, { status: 400 });
+      // Verification is delegated to the WABA OTP service (single-use codes,
+      // server-side expiry + attempt limits). It always 200s with { valid }.
+      const check = await verifyOtpCode(phone, otp_entered);
+      if (!check.valid) {
+        console.warn('[verify] WABA rejected code —', check.reason ?? 'invalid');
+        return NextResponse.json(
+          { success: false, error: 'The code is incorrect or has expired. Please try again.' },
+          { status: 400 },
+        );
       }
     }
 

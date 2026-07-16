@@ -1,4 +1,4 @@
-// Resend OTP — generates a fresh code for an in-flight session.
+// Resend OTP — asks the WABA OTP service for a fresh code for an in-flight session.
 //
 // Unlike /api/otp/send, this route is idempotent w.r.t. downstream systems:
 //   - Does NOT insert a new registration row (avoids polluting the admin
@@ -9,20 +9,14 @@
 //   - Does NOT register again with Zoom (already done).
 //   - Does NOT fire a Lead pixel (already fired on the original send).
 //
-// What it does: validates the existing token, generates a NEW OTP + HMAC +
-// expiry, sends WhatsApp, and returns the NEW token + the previous Zoom URL
-// so the client UI keeps working as if the user just started the OTP step.
+// What it does: reads the existing token for context, asks the WABA service to
+// send a NEW code, and returns the token back so the client UI keeps working as
+// if the user just started the OTP step. The code + its verification are owned
+// by the WABA service — no HMAC/expiry is minted here.
 
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
-import { sendWhatsAppOtp } from '@/lib/whatsapp';
+import { sendOtpCode } from '@/lib/otpService';
 import { recordOtpSendResult } from '@/lib/db';
-
-function requireEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing required env var: ${name}`);
-  return v;
-}
 
 export async function POST(req: NextRequest) {
   try {
@@ -32,10 +26,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Missing token' }, { status: 400 });
     }
 
-    // Decode previous token to recover the lead context (name/email/phone +
-    // zoomJoinUrl + registrationId). The token isn't signed — we sign the
-    // OTP itself via HMAC inside the token — but we accept it as-is since
-    // the attacker would need a valid send-route call to forge it anyway.
+    // Decode the token for lead context (phone + registrationId). It isn't
+    // signed; an attacker would need a valid send-route call to forge it anyway.
     let decoded: Record<string, unknown>;
     try {
       decoded = JSON.parse(Buffer.from(token, 'base64').toString('utf8'));
@@ -48,53 +40,29 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Bad token' }, { status: 400 });
     }
 
-    const hmacSecret = requireEnv('OTP_HMAC_SECRET');
-    if (hmacSecret.length < 32) throw new Error('OTP_HMAC_SECRET must be at least 32 chars');
+    // Ask the WABA OTP service to send a fresh code (area "PPC").
+    const otpSend = await sendOtpCode(phone);
 
-    // 1. Fresh OTP + expiry + HMAC.
-    const otp = String(crypto.randomInt(1000, 9999));
-    const expiry = Date.now() + 10 * 60 * 1000;
-    const hmac = crypto.createHmac('sha256', hmacSecret).update(`${phone}:${otp}:${expiry}`).digest('hex');
-
-    // 2. Deliver the fresh code via xBot. Lead context (name/email/city) rides
-    // along in the token minted by the original /api/otp/send.
-    const fullName = typeof decoded.fullName === 'string' ? decoded.fullName : '';
-    const email    = typeof decoded.email === 'string' ? decoded.email : '';
-    const city     = typeof decoded.city === 'string' ? decoded.city : '';
-    const waResult = await sendWhatsAppOtp({ phone, otp, fullName, email, city });
-
-    // Record the resend outcome on the same registration row (the id rides
-    // along in the token from the original /api/otp/send). Best-effort.
+    // Record the resend outcome on the same registration row. Best-effort.
     const registrationId = typeof decoded.registrationId === 'string' ? decoded.registrationId : null;
     if (registrationId) {
       try {
         await recordOtpSendResult(registrationId, {
-          whatsappStatus: waResult.status,
-          whatsappError: waResult.error,
-          whatsappMessageId: waResult.messageId ?? null,
+          whatsappStatus: otpSend.ok ? 'sent' : 'failed',
+          whatsappError: otpSend.error,
+          whatsappMessageId: null,
         });
       } catch (err) {
         console.error('[otp/resend] recordOtpSendResult failed:', err);
       }
     }
 
-    // 3. Build refreshed token. Carries forward everything from the old
-    // token (name, email, city, typeFilter, zoomJoinUrl, registrationId)
-    // but with the fresh expiry + HMAC.
-    const newTokenPayload = {
-      ...decoded,
-      expiry,
-      hmac,
-    };
-    const newToken = Buffer.from(JSON.stringify(newTokenPayload)).toString('base64');
-
+    // The token is unchanged (context only) — hand it back so the client keeps
+    // its in-flight OTP state.
     return NextResponse.json({
       success: true,
-      token: newToken,
-      waStatus: waResult.status,
-      // We deliberately do NOT expose the underlying error string to the
-      // client — could leak Meta error codes. The user just sees the UI
-      // toast and tries again or uses the help link.
+      token,
+      waStatus: otpSend.ok ? 'sent' : 'failed',
     });
   } catch (error) {
     console.error('Resend OTP error:', error);
