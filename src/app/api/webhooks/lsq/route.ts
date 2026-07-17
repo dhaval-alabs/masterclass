@@ -22,16 +22,16 @@
 // VERIFY the source-prefix list against real production Source values before
 // relying on it — see the warning at that constant.
 //
-// ⚠️ PAYLOAD SHAPE — VERIFY ON FIRST LIVE CALL, DON'T TRUST BLINDLY:
-// The parser below assumes LSQ's native (non-sGTM) Lead Stage Change webhook
-// sends { Before: {...lead fields...}, After: {...lead fields...} } — this is
-// inferred from the Apps Script relay's own isLeadCreation check
-// (`!body.Before && !body.After`), which implies the raw LSQ payload for a
-// STAGE CHANGE does carry Before/After. This has NOT been confirmed against
-// an actual live LSQ webhook call to this new endpoint yet. The catch-all
-// logging below deliberately dumps the raw body on every request during
-// initial rollout so the first real call can be inspected and this comment
-// corrected if the shape differs.
+// ✅ PAYLOAD SHAPE — CONFIRMED against a real live LSQ webhook call (Jul 17,
+// via a deliberate test-lead stage change). Before/After shape is correct.
+// Two real bugs were found and fixed from that live payload:
+//   1. The field is "EmailAddress", not "Email".
+//   2. CRITICAL: the webhook payload does NOT include custom fields
+//      (mx_FBCLID, City) at all — confirmed absent on a lead that has
+//      mx_FBCLID set in LSQ. Without a separate lookup, fbc would never be
+//      attached to any Meta event this endpoint sends. Fixed via
+//      fetchCustomFieldsFromLsq() below — one extra LSQ API call per event,
+//      unavoidable given the webhook's payload doesn't carry it.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { sendMetaCapiEvent, type MetaUserData } from '@/lib/meta';
@@ -114,22 +114,62 @@ function mapStageToMetaEvent(stage: string): MetaEventPlan | null {
   return null; // stage not in the 4+1 set — no event, e.g. RNR/Not Reachable/New Lead
 }
 
-// ── LSQ payload shape (see warning at top of file) ──────────────────────────
+// ── LSQ payload shape — CONFIRMED against a real live webhook call (Jul 17) ──
+// Standard fields ARE sent by LSQ's native Lead Stage Change webhook.
+// CRITICAL: custom fields (mx_ prefixed) are NOT included in this payload —
+// confirmed by inspecting a real live call, which carried no mx_FBCLID or
+// City field at all despite the lead record having them in LSQ. This means
+// fbclid — the entire point of this endpoint — can NEVER be read from the
+// webhook body itself. See fetchFullLeadFromLsq() below, added specifically
+// to cover this gap.
 interface LsqLeadFields {
   ProspectID?: string;
   ProspectStage?: string;
   Source?: string;
   FirstName?: string;
   LastName?: string;
-  Email?: string;
+  EmailAddress?: string; // NOT "Email" — confirmed field name from live payload
   Phone?: string;
-  City?: string;
-  mx_FBCLID?: string;
   ModifiedOn?: string;
 }
 interface LsqStageChangeBody {
   Before?: LsqLeadFields;
   After?: LsqLeadFields;
+}
+
+// ── Fetch custom fields (mx_FBCLID, City) the webhook payload doesn't carry ──
+// LSQ's Lead Stage Change webhook only sends standard fields (confirmed live,
+// Jul 17) — mx_ custom fields are absent entirely, not just empty. Without
+// this extra lookup, fbc would never be attached to any Meta event this
+// endpoint sends, silently degrading match quality for every push. Same
+// pattern the Google Apps Script relay already uses (fetchLeadFromLsq) for
+// the identical reason on its side.
+async function fetchCustomFieldsFromLsq(prospectId: string): Promise<{ fbclid?: string; city?: string }> {
+  const accessKey = process.env.LSQ_ACCESS;
+  const secretKey = process.env.LSQ_SECRET;
+  const host      = process.env.LSQ_HOST || 'https://api-in21.leadsquared.com';
+  if (!accessKey || !secretKey || !prospectId) return {};
+
+  try {
+    const res = await fetch(
+      `${host}/v2/LeadManagement.svc/Leads.GetById?accessKey=${accessKey}&secretKey=${secretKey}&id=${encodeURIComponent(prospectId)}`,
+      { method: 'GET' }
+    );
+    if (!res.ok) {
+      console.error('fetchCustomFieldsFromLsq: LSQ API error', res.status, prospectId);
+      return {};
+    }
+    const data = await res.json();
+    const record = Array.isArray(data) ? data[0] : data;
+    if (!record) return {};
+    return {
+      fbclid: record.mx_FBCLID || undefined,
+      city: record.City || record.mx_City || undefined,
+    };
+  } catch (err) {
+    console.error('fetchCustomFieldsFromLsq failed for', prospectId, err);
+    return {};
+  }
 }
 
 // ── Write source_class back to LSQ (fire-and-forget, doesn't block the CAPI push) ──
@@ -192,17 +232,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: 'skipped', reason: 'stage_not_in_event_set', stage: after.ProspectStage });
   }
 
+  // The webhook payload itself never carries mx_FBCLID/City (confirmed live,
+  // Jul 17) — fetch them separately. This is an extra LSQ API call per event,
+  // but there's no way around it: without it, fbc is never attached, ever.
+  const customFields = await fetchCustomFieldsFromLsq(after.ProspectID);
+
   const userData: MetaUserData = {
-    email: after.Email,
+    email: after.EmailAddress,
     phone: after.Phone,
     firstName: after.FirstName,
     lastName: after.LastName,
-    city: after.City,
+    city: customFields.city,
     country: 'in',
     // mx_FBCLID is stored in LSQ already in Meta's fbc format
     // (observed live: "fb.2.<timestamp>.<encoded>...") — pass through as-is,
     // NOT hashed (sendMetaCapiEvent's fbc field expects the raw cookie value).
-    fbc: after.mx_FBCLID,
+    fbc: customFields.fbclid,
   };
 
   const stageChangedAt = after.ModifiedOn ? Date.parse(after.ModifiedOn) : Date.now();
