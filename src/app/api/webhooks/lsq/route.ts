@@ -58,6 +58,19 @@ function isAuthorized(req: NextRequest): boolean {
 // to stamp it into).
 const SOURCE_CLASS = 'social';
 
+// v10.9.6-equivalent fix (Jul 17): the endpoint previously only logged the
+// INCOMING payload, never the OUTCOME (sent / skipped / failed). A 200 HTTP
+// status alone doesn't tell you whether an event actually reached Meta or was
+// silently skipped for a reason — confirmed this gap the hard way when a
+// manufactured test via the LSQ MCP's update tool didn't fire the webhook at
+// all, and the one real organic event that did fire left no visible outcome
+// beyond "200" in Vercel's request list. Every response now logs its own
+// outcome right before returning, so this is never ambiguous again.
+function logAndRespond(body: Record<string, unknown>, init?: { status?: number }) {
+  console.log('LSQ webhook outcome:', JSON.stringify(body));
+  return NextResponse.json(body, init);
+}
+
 // ── LSQ stage → Meta event mapping ──────────────────────────────────────────
 // Per the primer's 4+1 event set. SQL stage list reuses the Google relay's
 // mapping pending Sabrish's sign-off (per the primer: "M1 proceeds on the
@@ -209,14 +222,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  // Deliberate during initial rollout — remove once the payload shape above
-  // is confirmed against a real live call and this comment block is updated.
   console.log('LSQ webhook raw payload:', JSON.stringify(body));
 
   const after = body.After;
   if (!after || !after.ProspectID) {
     console.warn('LSQ webhook: no After.ProspectID in payload — skipping.', body);
-    return NextResponse.json({ status: 'skipped', reason: 'no_prospect_id' });
+    return logAndRespond({ status: 'skipped', reason: 'no_prospect_id' });
   }
 
   // Critical: this webhook is account-wide (LSQ doesn't filter by property at
@@ -224,12 +235,12 @@ export async function POST(req: NextRequest) {
   // to an event. Without this, Google Ads leads would get Meta CAPI events
   // and a 'social' mislabel. See META_SOURCE_PREFIXES comment above.
   if (!isMetaSourced(after.Source || '')) {
-    return NextResponse.json({ status: 'skipped', reason: 'not_meta_sourced', source: after.Source });
+    return logAndRespond({ status: 'skipped', reason: 'not_meta_sourced', source: after.Source });
   }
 
   const plan = mapStageToMetaEvent(after.ProspectStage || '');
   if (!plan) {
-    return NextResponse.json({ status: 'skipped', reason: 'stage_not_in_event_set', stage: after.ProspectStage });
+    return logAndRespond({ status: 'skipped', reason: 'stage_not_in_event_set', stage: after.ProspectStage });
   }
 
   // The webhook payload itself never carries mx_FBCLID/City (confirmed live,
@@ -266,15 +277,18 @@ export async function POST(req: NextRequest) {
   stampSourceClassOnLsq(after.ProspectID);
 
   if (!result.ok) {
-    console.error('Meta CAPI push failed for', after.ProspectID, result.error);
-    return NextResponse.json({ status: 'capi_failed', error: result.error }, { status: 502 });
+    return logAndRespond(
+      { status: 'capi_failed', error: result.error, prospectId: after.ProspectID },
+      { status: 502 }
+    );
   }
 
-  return NextResponse.json({
+  return logAndRespond({
     status: 'sent',
     prospectId: after.ProspectID,
     eventName: plan.eventName,
     eventId,
+    hadFbclid: !!customFields.fbclid, // visible confirmation the fetch found something, without leaking the value itself
   });
 }
 
