@@ -176,8 +176,12 @@ export async function POST(req: NextRequest) {
       : crypto.randomUUID();
 
     // 2. LSQ lead capture
+    const landingPageUrl: string = typeof body.landingPageUrl === 'string' ? body.landingPageUrl : '';
     const notesLines: string[] = [
       body.referralSource ? `Referral Source: ${body.referralSource}` : null,
+      // Always record the landing-page URL in Notes so it's visible in LSQ
+      // regardless of whether a dedicated custom field is configured.
+      landingPageUrl ? `Landing Page: ${landingPageUrl}` : null,
       `Registered: ${new Date().toISOString()}`,
     ].filter((line): line is string => line !== null);
     const notesFieldName = process.env.LSQ_NOTES_FIELD_NAME || 'mx_Notes';
@@ -199,6 +203,15 @@ export async function POST(req: NextRequest) {
       { Attribute: 'mx_OTP_Status', Value: 'Unverified' },
       { Attribute: notesFieldName, Value: notesLines.join('\n') },
     ];
+
+    // Also populate a dedicated landing-page custom field — but ONLY when its
+    // schema name is configured. LSQ's Lead.Capture rejects the WHOLE lead if
+    // it's sent an unknown attribute, so we never send this by default. Create
+    // the field in LSQ, then set LSQ_LANDING_PAGE_FIELD to its schema name.
+    const landingPageField = process.env.LSQ_LANDING_PAGE_FIELD?.trim();
+    if (landingPageField) {
+      lsqPayload.push({ Attribute: landingPageField, Value: landingPageUrl });
+    }
 
     // 3. Fire LSQ + Sheets in parallel (non-blocking to the user)
     await Promise.allSettled([
