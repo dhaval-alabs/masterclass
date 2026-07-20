@@ -5,6 +5,18 @@
 // Jul-9 trunk/branches architecture note: Google and Meta are intentionally
 // separate campaign architectures at AnalytixLabs today).
 //
+// ✅ GATE CHECK CLOSED (Jul 20): a real production event (Roshani Mane,
+// PPC-SM, New Lead -> Marketing Lead) confirmed sent with hadFbclid:true.
+// The pipe works end-to-end on real traffic — this was the single open
+// item blocking everything below from mattering, now resolved.
+//
+// V2 EVENT MAPPING (Jul 20, finalised with Sabrish) — see CONNECTED_STAGES /
+// SALES_QUALIFIED_STAGES / DISQUALIFIED_STAGES below for the full change:
+// split SalesQualified into Connected + SalesQualified, added ML-Enquiry
+// (net-new — the social-engagement signal), removed Marketing Lead from
+// suppression (ambiguous per Sabrish), added RNR/Not Reachable as
+// suppression, dropped the Purchase value:1 placeholder (count-only now).
+//
 // Unlike the Google relay, this endpoint is STATELESS — no ledger, no day-5
 // delay, no import-cutoff windows. Per the Meta primer: Meta optimizes one
 // event per ad set, value lives only on Purchase, and lead quality is
@@ -71,19 +83,33 @@ function logAndRespond(body: Record<string, unknown>, init?: { status?: number }
   return NextResponse.json(body, init);
 }
 
-// ── LSQ stage → Meta event mapping ──────────────────────────────────────────
-// Per the primer's 4+1 event set. SQL stage list reuses the Google relay's
-// mapping pending Sabrish's sign-off (per the primer: "M1 proceeds on the
-// Google mapping meanwhile") — same stage-name list as STAGE_MAP's QUALIFIED
-// bucket in the Apps Script relay, kept in sync manually until Phase 1.9
-// unifies the trunk.
-const SQL_STAGES = new Set([
-  'enquiry', 're-enquiry', 'hot', 'warm', 'priority-call',
+// ── LSQ stage → Meta event mapping (V2 — finalised with Sabrish, Jul 20) ──
+// Per the primer's event set, now refined with real stage-meaning input:
+//   - Connected = lower-value social engagement (Enquiry, Re-Enquiry,
+//     ML-Enquiry). ML-Enquiry is net-new: the social-path enquiry signal
+//     (a social lead who engaged after someone spoke to them) — previously
+//     fell through to null (fired nothing) despite being the single most
+//     important social-engagement stage to capture.
+//   - SalesQualified = higher-value (Hot, Warm, Priority-Call). Priority-Call
+//     moved here from Connected per Sabrish's sign-off (was grouped with the
+//     lower-value stages in the earlier draft).
+//   - Marketing Lead is DELIBERATELY EXCLUDED from both suppression and
+//     qualification — Sabrish confirmed it's used for both fresh and dead
+//     social leads, so it's ambiguous and must not be fed as either signal.
+//     Falls through to null (fires nothing), same treatment as New Lead.
+//   - RNR / Not Reachable = suppression signal (via Disqualified, still
+//     carries no value) — the only clean dead-lead seeds, per Sabrish.
+const CONNECTED_STAGES = new Set([
+  'enquiry', 're-enquiry', 'ml-enquiry',
+]);
+const SALES_QUALIFIED_STAGES = new Set([
+  'hot', 'warm', 'priority-call',
 ]);
 const DISQUALIFIED_STAGES = new Set([
-  'disqualified', 'junk', 'cold', 'not interested', 'marketing lead',
+  'disqualified', 'junk', 'cold', 'not interested',
   'recruitment/hiring candidate', 'job role/trainer job role',
   'collaboration/college events', 'corporate training', 'test',
+  'rnr', 'not reachable', // suppression signal, no value — added Jul 20
 ]);
 const ENROLLED_STAGE = 'enrolled';
 
@@ -109,22 +135,27 @@ function isMetaSourced(source: string): boolean {
   return META_SOURCE_PREFIXES.some((prefix) => s.startsWith(prefix));
 }
 
-type MetaEventPlan = { eventName: 'SalesQualified' | 'Disqualified' | 'Purchase'; value?: number };
+type MetaEventPlan = { eventName: 'Connected' | 'SalesQualified' | 'Disqualified' | 'Purchase'; value?: number };
 
 function mapStageToMetaEvent(stage: string): MetaEventPlan | null {
   const s = (stage || '').trim().toLowerCase();
   if (s === ENROLLED_STAGE) {
-    // Purchase value knob (real fee vs tier proxy) is Sumeet's open decision —
-    // do NOT block the event on it. Placeholder value, clearly marked.
-    return { eventName: 'Purchase', value: 1 }; // TODO: real value pending Sumeet's sign-off
+    // Count-only per Sabrish's Jul 20 sign-off — the earlier value:1
+    // placeholder is dropped. No real value until value bidding runs; Meta
+    // is on volume optimisation for now, so a bare count is correct, not a
+    // gap to fill later.
+    return { eventName: 'Purchase' };
   }
   if (DISQUALIFIED_STAGES.has(s)) {
     return { eventName: 'Disqualified' }; // suppression-audience seed only — never value-bearing
   }
-  if (SQL_STAGES.has(s)) {
+  if (SALES_QUALIFIED_STAGES.has(s)) {
     return { eventName: 'SalesQualified' };
   }
-  return null; // stage not in the 4+1 set — no event, e.g. RNR/Not Reachable/New Lead
+  if (CONNECTED_STAGES.has(s)) {
+    return { eventName: 'Connected' };
+  }
+  return null; // stage not in the event set — New Lead, Marketing Lead (deliberately ambiguous, see above)
 }
 
 // ── LSQ payload shape — CONFIRMED against a real live webhook call (Jul 17) ──
