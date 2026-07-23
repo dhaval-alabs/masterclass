@@ -28,7 +28,7 @@
 // AnalytixLabs properties (careersuccess/Google, masterclass/Meta,
 // classroom-lp/Meta) — it is not filterable by property at the subscription
 // level. This endpoint filters by Source internally (see isMetaSourced /
-// META_SOURCE_PREFIXES below) — the mirror image of the Google Apps Script
+// META_SOURCE_TERMS below) — the mirror image of the Google Apps Script
 // relay's own SKIP_NON_PPC filter. Without this, every Google Ads stage
 // change would also fire a Meta CAPI event and get mislabeled 'social'.
 // VERIFY the source-prefix list against real production Source values before
@@ -123,16 +123,20 @@ const ENROLLED_STAGE = 'enrolled';
 // solves the mirror-image problem with its own SKIP_NON_PPC filter; this is
 // the same discipline applied to the Meta side.
 //
-// ⚠️ VERIFY against real Source values before relying on this in production —
-// these are inferred from live relay-log observations (PPC-SM, PPC-SM-
-// Classroom seen as Meta-tagged sources reaching LSQ) and have not been
-// exhaustively confirmed against every masterclass/classroom-lp source tag
-// in use. Widen or correct this list from real data, not from this comment.
-const META_SOURCE_PREFIXES = ['ppc-sm', 'meta'];
+// ⚠️ WIDENED Jul 23 — confirmed via live LSQ data that 'ppc-sm'/'meta' alone
+// missed real, current Meta traffic: found live leads with Source='Facebook
+// Ads' (several sitting in ML-Enquiry — exactly the stage V2 calls out as
+// the key social-engagement signal) and Source='Instagram' (created this
+// month), both silently skipped as not_meta_sourced until now. Switched from
+// prefix-only (startsWith) to substring matching (includes), mirroring the
+// channel-detection regex already proven out in classroom-lp's own admin
+// dashboard (/meta|facebook|fb|instagram/). Still not guaranteed exhaustive —
+// re-check if a genuine Meta source is ever found NOT matching this list.
+const META_SOURCE_TERMS = ['ppc-sm', 'meta', 'facebook', 'instagram'];
 
 function isMetaSourced(source: string): boolean {
   const s = (source || '').trim().toLowerCase();
-  return META_SOURCE_PREFIXES.some((prefix) => s.startsWith(prefix));
+  return META_SOURCE_TERMS.some((term) => s.includes(term));
 }
 
 type MetaEventPlan = { eventName: 'Connected' | 'SalesQualified' | 'Disqualified' | 'Purchase'; value?: number };
@@ -264,7 +268,7 @@ export async function POST(req: NextRequest) {
   // Critical: this webhook is account-wide (LSQ doesn't filter by property at
   // the subscription level) — drop anything not Meta-sourced BEFORE mapping
   // to an event. Without this, Google Ads leads would get Meta CAPI events
-  // and a 'social' mislabel. See META_SOURCE_PREFIXES comment above.
+  // and a 'social' mislabel. See META_SOURCE_TERMS comment above.
   if (!isMetaSourced(after.Source || '')) {
     return logAndRespond({ status: 'skipped', reason: 'not_meta_sourced', source: after.Source });
   }
