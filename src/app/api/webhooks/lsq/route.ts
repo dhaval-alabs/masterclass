@@ -47,6 +47,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { sendMetaCapiEvent, type MetaUserData } from '@/lib/meta';
+import { getLatestFbcForContact } from '@/lib/db';
 
 // ── Auth — LSQ does not sign its webhook payloads (confirmed: neither does
 // the existing Apps Script relay verify a signature on inbound LSQ calls).
@@ -283,6 +284,21 @@ export async function POST(req: NextRequest) {
   // but there's no way around it: without it, fbc is never attached, ever.
   const customFields = await fetchCustomFieldsFromLsq(after.ProspectID);
 
+  // fbc resolution (Meta click ID for deterministic match).
+  //   1. LSQ's mx_FBCLID — but this is frequently BLANK for exactly the leads
+  //      that reach Hot/Warm/Enrolled: Lead.Capture upserts, and a re-
+  //      registration (often organic) overwrites the original click ID with ''.
+  //   2. Fallback to our OWN registrations table, which is insert-per-
+  //      registration and never overwritten, so the first-touch fbc survives.
+  // mx_FBCLID / registrations.fbc are both already in Meta's fbc cookie format
+  // ("fb.1.<ts>.<fbclid>") — passed through raw, NOT hashed.
+  let fbc: string | undefined = customFields.fbclid || undefined;
+  let fbcSource: 'lsq' | 'db' | 'none' = fbc ? 'lsq' : 'none';
+  if (!fbc) {
+    const recovered = await getLatestFbcForContact(after.EmailAddress, after.Phone);
+    if (recovered.fbc) { fbc = recovered.fbc; fbcSource = 'db'; }
+  }
+
   const userData: MetaUserData = {
     email: after.EmailAddress,
     phone: after.Phone,
@@ -290,10 +306,7 @@ export async function POST(req: NextRequest) {
     lastName: after.LastName,
     city: customFields.city,
     country: 'in',
-    // mx_FBCLID is stored in LSQ already in Meta's fbc format
-    // (observed live: "fb.2.<timestamp>.<encoded>...") — pass through as-is,
-    // NOT hashed (sendMetaCapiEvent's fbc field expects the raw cookie value).
-    fbc: customFields.fbclid,
+    fbc,
   };
 
   const stageChangedAt = after.ModifiedOn ? Date.parse(after.ModifiedOn) : Date.now();
@@ -323,7 +336,8 @@ export async function POST(req: NextRequest) {
     prospectId: after.ProspectID,
     eventName: plan.eventName,
     eventId,
-    hadFbclid: !!customFields.fbclid, // visible confirmation the fetch found something, without leaking the value itself
+    hadFbclid: !!fbc,   // whether an fbc was attached, without leaking the value
+    fbcSource,          // 'lsq' | 'db' | 'none' — where the fbc came from (recovery visibility)
   });
 }
 

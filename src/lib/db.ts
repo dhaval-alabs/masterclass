@@ -764,6 +764,46 @@ export async function findRegistrationByEmailOrPhone(
 }
 
 /**
+ * Recover the original Meta click ID (fbc) for a contact from our OWN
+ * registrations table. Unlike LSQ's mx_FBCLID — which Lead.Capture blanks on a
+ * re-registration upsert — this table is insert-per-registration and never
+ * overwritten, so the first-touch fbc survives. Used by the LSQ→Meta webhook as
+ * a fallback when a lead's mx_FBCLID has been blanked (the common case for
+ * qualified/repeat leads), restoring deterministic match quality on CAPI events.
+ *
+ * Matches the same way findRegistrationByEmailOrPhone does (email ilike, phone
+ * digits-only eq), but is NOT session-scoped — we want the best fbc this person
+ * ever had, across all their registrations. Returns the newest row that has one.
+ */
+export async function getLatestFbcForContact(
+  email?: string | null,
+  phone?: string | null,
+): Promise<{ fbc: string | null; fbp: string | null }> {
+  const normEmail = (email ?? '').trim().toLowerCase();
+  const normPhone = (phone ?? '').replace(/\D/g, '');
+  if (!normEmail && !normPhone) return { fbc: null, fbp: null };
+
+  try {
+    const supabase = client();
+    const [byEmail, byPhone] = await Promise.all([
+      normEmail
+        ? supabase.from('registrations').select('fbc, fbp, created_at').ilike('email', normEmail).not('fbc', 'is', null).neq('fbc', '').order('created_at', { ascending: false }).limit(1)
+        : Promise.resolve({ data: null, error: null }),
+      normPhone
+        ? supabase.from('registrations').select('fbc, fbp, created_at').eq('phone', normPhone).not('fbc', 'is', null).neq('fbc', '').order('created_at', { ascending: false }).limit(1)
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+    if (byEmail.error) throw byEmail.error;
+    if (byPhone.error) throw byPhone.error;
+    const row = (byEmail.data?.[0] ?? byPhone.data?.[0]) as { fbc?: string | null; fbp?: string | null } | undefined;
+    return { fbc: row?.fbc ?? null, fbp: row?.fbp ?? null };
+  } catch (err) {
+    console.error('[db.getLatestFbcForContact]', err);
+    return { fbc: null, fbp: null };
+  }
+}
+
+/**
  * Inserts an unverified lead. Returns the new registration's id so the caller
  * can embed it in the OTP token and later mark it verified.
  *
