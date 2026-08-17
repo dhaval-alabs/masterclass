@@ -189,16 +189,25 @@ export async function POST(req: NextRequest) {
       { Attribute: 'Phone',        Value: phone },
       { Attribute: 'mx_City_name', Value: city },
       { Attribute: 'Source',       Value: typeFilter || config?.lsqSourceName?.trim() || 'PPC-SM' },
-      { Attribute: 'mx_GCLID',     Value: body.gclid || '' },
-      // Meta click id for CRM→Meta event matching. Prefer the formatted _fbc
-      // cookie (what Meta CAPI expects); fall back to the raw fbclid param.
-      // Field name is env-configurable because LSQ derives the schema name from
-      // the display name on save (usually mx_FBCLID) — set LSQ_FBCLID_FIELD if
-      // it generated something else.
-      { Attribute: process.env.LSQ_FBCLID_FIELD || 'mx_FBCLID', Value: body.fbc || body.fbclid || '' },
       { Attribute: 'mx_OTP_Status', Value: 'Unverified' },
       { Attribute: notesFieldName, Value: notesLines.join('\n') },
     ];
+
+    // Click IDs (mx_GCLID / mx_FBCLID) are effectively WRITE-ONCE from the LP's
+    // side. Lead.Capture UPSERTS by email/phone, so sending an empty value on a
+    // re-registration OVERWRITES a previously-captured click ID with blank —
+    // this is why repeat/qualified leads (who register for multiple webinars,
+    // often organically the 2nd time) end up with a null mx_FBCLID, silently
+    // degrading Meta CAPI match quality for every counselor-grade event.
+    // Fix: only send these attributes when we actually have a value; otherwise
+    // omit them entirely so LSQ keeps whatever it already has.
+    // Meta click id: prefer the formatted _fbc cookie (what CAPI expects), fall
+    // back to the raw fbclid param. Field name is env-configurable because LSQ
+    // derives the schema name from the display name on save (usually mx_FBCLID).
+    const gclidValue  = body.gclid || '';
+    const fbclidValue = body.fbc || body.fbclid || '';
+    if (gclidValue)  lsqPayload.push({ Attribute: 'mx_GCLID', Value: gclidValue });
+    if (fbclidValue) lsqPayload.push({ Attribute: process.env.LSQ_FBCLID_FIELD || 'mx_FBCLID', Value: fbclidValue });
 
     // 3. Fire LSQ + Sheets in parallel (non-blocking to the user)
     await Promise.allSettled([
