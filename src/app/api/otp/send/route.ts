@@ -46,7 +46,8 @@ export async function POST(req: NextRequest) {
     // can't bypass a session that still requires OTP.
     const otpRequired = config?.otpRequired !== false;
 
-    // Ask the WABA OTP service to generate + WhatsApp the code (area "PPC").
+    // Ask the WABA OTP service to generate + WhatsApp the code (default number
+    // unless OTP_AREA is set to a named area).
     const zoomWebinarId = config?.zoomWebinarId?.trim() || null;
     const otpSend = otpRequired
       ? await sendOtpCode(phone)

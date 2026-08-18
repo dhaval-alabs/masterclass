@@ -40,7 +40,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Bad token' }, { status: 400 });
     }
 
-    // Ask the WABA OTP service to send a fresh code (area "PPC").
+    // Ask the WABA OTP service to send a fresh code (default number unless
+    // OTP_AREA is set to a named area).
     const otpSend = await sendOtpCode(phone);
 
     // Record the resend outcome on the same registration row. Best-effort.
