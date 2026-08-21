@@ -6,10 +6,14 @@
 // Env:
 //   OTP_API_SECRET    (required)  — same value configured on the portal
 //   OTP_API_BASE_URL  (optional)  — defaults to https://waba.analytixlabs.co.in
-//   OTP_AREA          (optional)  — routing area / number; defaults to "PPC"
+//   OTP_AREA          (optional)  — routing area / number. If UNSET or blank, the
+//                                   "area" field is OMITTED on send and WABA routes
+//                                   to the DEFAULT number. Set it only to force a
+//                                   named area (e.g. "PPC").
 
 const BASE_URL = (process.env.OTP_API_BASE_URL || 'https://waba.analytixlabs.co.in').replace(/\/+$/, '');
-const DEFAULT_AREA = process.env.OTP_AREA || 'PPC';
+// Empty string ⇒ omit "area" on send ⇒ WABA uses the default number.
+const DEFAULT_AREA = process.env.OTP_AREA || '';
 
 function secret(): string {
   const s = process.env.OTP_API_SECRET;
@@ -37,10 +41,17 @@ export type OtpSendResult = {
 /** Ask the service to generate + WhatsApp a fresh code to this phone. */
 export async function sendOtpCode(phone: string, area: string = DEFAULT_AREA): Promise<OtpSendResult> {
   try {
+    // Only include "area" when we actually have one. Omitting it makes the WABA
+    // service route to the DEFAULT number (per the portal's integration note),
+    // instead of a named area like "PPC".
+    const trimmedArea = (area || '').trim();
+    const body = trimmedArea
+      ? { phone: toServicePhone(phone), area: trimmedArea }
+      : { phone: toServicePhone(phone) };
     const res = await fetch(`${BASE_URL}/api/otp/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-otp-secret': secret() },
-      body: JSON.stringify({ phone: toServicePhone(phone), area }),
+      body: JSON.stringify(body),
     });
     const data = (await res.json().catch(() => null)) as
       | { success?: boolean; error?: string; retryAfterSeconds?: number }
