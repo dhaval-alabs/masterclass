@@ -785,18 +785,34 @@ export async function getLatestFbcForContact(
 
   try {
     const supabase = client();
+    const sel = 'fbc, fbp, fbclid, created_at';
+    // Accept a row that has a click id in EITHER form — a real fbc, OR a raw
+    // fbclid we can rebuild into a valid fb.1.<ts>.<fbclid>. Either is far
+    // better than sending the CAPI event with no click id at all (which is what
+    // caused the ~1-in-6 attribution loss on qualified leads).
+    const orFilter = 'fbc.not.is.null,fbclid.not.is.null';
     const [byEmail, byPhone] = await Promise.all([
       normEmail
-        ? supabase.from('registrations').select('fbc, fbp, created_at').ilike('email', normEmail).not('fbc', 'is', null).neq('fbc', '').order('created_at', { ascending: false }).limit(1)
+        ? supabase.from('registrations').select(sel).ilike('email', normEmail).or(orFilter).order('created_at', { ascending: false }).limit(1)
         : Promise.resolve({ data: null, error: null }),
       normPhone
-        ? supabase.from('registrations').select('fbc, fbp, created_at').eq('phone', normPhone).not('fbc', 'is', null).neq('fbc', '').order('created_at', { ascending: false }).limit(1)
+        ? supabase.from('registrations').select(sel).eq('phone', normPhone).or(orFilter).order('created_at', { ascending: false }).limit(1)
         : Promise.resolve({ data: null, error: null }),
     ]);
     if (byEmail.error) throw byEmail.error;
     if (byPhone.error) throw byPhone.error;
-    const row = (byEmail.data?.[0] ?? byPhone.data?.[0]) as { fbc?: string | null; fbp?: string | null } | undefined;
-    return { fbc: row?.fbc ?? null, fbp: row?.fbp ?? null };
+    const row = (byEmail.data?.[0] ?? byPhone.data?.[0]) as
+      | { fbc?: string | null; fbp?: string | null; fbclid?: string | null; created_at?: string | null }
+      | undefined;
+    if (!row) return { fbc: null, fbp: null };
+    let fbc = row.fbc && String(row.fbc).trim() ? String(row.fbc) : null;
+    // Rebuild a spec-valid fbc from a stored raw fbclid (older captures that
+    // never had an _fbc cookie). Use the registration time as the fbc timestamp.
+    if (!fbc && row.fbclid) {
+      const ts = row.created_at ? Date.parse(row.created_at) : Date.now();
+      fbc = `fb.1.${Number.isFinite(ts) ? ts : Date.now()}.${row.fbclid}`;
+    }
+    return { fbc, fbp: row.fbp ?? null };
   } catch (err) {
     console.error('[db.getLatestFbcForContact]', err);
     return { fbc: null, fbp: null };

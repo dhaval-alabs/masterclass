@@ -298,6 +298,13 @@ export async function POST(req: NextRequest) {
     const recovered = await getLatestFbcForContact(after.EmailAddress, after.Phone);
     if (recovered.fbc) { fbc = recovered.fbc; fbcSource = 'db'; }
   }
+  // Normalize to Meta's _fbc format. LSQ's mx_FBCLID sometimes holds a RAW
+  // fbclid (older captures, before the frontend built _fbc) rather than
+  // fb.1.<ts>.<fbclid>; Meta drops a raw fbclid in the fbc field, so wrap it.
+  if (fbc && !fbc.startsWith('fb.')) {
+    const ts = after.ModifiedOn ? Date.parse(after.ModifiedOn) : Date.now();
+    fbc = `fb.1.${Number.isFinite(ts) ? ts : Date.now()}.${fbc}`;
+  }
 
   const userData: MetaUserData = {
     email: after.EmailAddress,
