@@ -5,6 +5,7 @@ import { addRegistration, markRegistrationVerified, getAutoSendCampaign, schedul
 import { registerWebinarParticipant } from '@/lib/zoom';
 import { verifyOtpCode } from '@/lib/otpService';
 import { scoreAndSave, type ConversationTurn } from '@/lib/qualify';
+import { lsqPostWithRetry } from '@/lib/lsqClient';
 
 // Diagnostic: append a line to a temp file so scoring issues can be traced
 // even when the dev server's stdout isn't being captured. Safe no-op on error.
@@ -23,25 +24,41 @@ function requireEnv(name: string): string {
   return v;
 }
 
-async function updateLeadSquaredToVerified(phone: string) {
+// Stamp mx_OTP_Status=Verified on the LSQ lead. This USED to be single-attempt
+// fire-and-forget: a transient LSQ 5xx silently left a verified lead marked
+// Unverified in the CRM (mis-scored, mis-routed by sales) while the user still
+// got a 200. The Lead.Update now retries with delivery confirmation via the
+// shared LSQ client, matching the hardened capture path. Returns whether the
+// verified stamp was actually delivered.
+async function updateLeadSquaredToVerified(phone: string): Promise<{ delivered: boolean; reason?: string }> {
   try {
     const access = requireEnv('LSQ_ACCESS');
     const secret = requireEnv('LSQ_SECRET');
+    // Lead lookup is a read — a single attempt is fine; if it fails we can't
+    // know which lead to update, so report it and let the caller log.
     const searchUrl = `https://api-in21.leadsquared.com/v2/LeadManagement.svc/RetrieveLeadByPhoneNumber?accessKey=${access}&secretKey=${secret}&phone=${encodeURIComponent(phone)}`;
     const searchRes = await fetch(searchUrl);
     const searchData = await searchRes.json();
 
-    if (searchRes.ok && searchData && searchData.length > 0) {
-      const prospectId = searchData[0].ProspectID;
-      const updateUrl = `https://api-in21.leadsquared.com/v2/LeadManagement.svc/Lead.Update?accessKey=${access}&secretKey=${secret}&leadId=${prospectId}`;
-      await fetch(updateUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify([{ Attribute: 'mx_OTP_Status', Value: 'Verified' }])
-      });
+    if (!searchRes.ok) return { delivered: false, reason: `lookup HTTP ${searchRes.status}` };
+    if (!Array.isArray(searchData) || searchData.length === 0) {
+      // No LSQ lead yet (e.g. capture is still retrying) — not an error to retry
+      // here; the account-wide Lead-Stage webhook / later writes will reconcile.
+      return { delivered: false, reason: 'lead not found in LSQ' };
     }
+
+    const prospectId = searchData[0].ProspectID;
+    const updateUrl = `https://api-in21.leadsquared.com/v2/LeadManagement.svc/Lead.Update?accessKey=${access}&secretKey=${secret}&leadId=${prospectId}`;
+    const result = await lsqPostWithRetry(
+      updateUrl,
+      [{ Attribute: 'mx_OTP_Status', Value: 'Verified' }],
+      'verify-stamp',
+      `lead=${prospectId}`,
+    );
+    return { delivered: result.ok, reason: result.ok ? undefined : (result.error ?? `HTTP ${result.status}`) };
   } catch (err) {
     console.error('[Verify LSQ] Error:', err);
+    return { delivered: false, reason: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -89,8 +106,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 3. Update External Systems
-    await updateLeadSquaredToVerified(phone);
+    // 3. Update External Systems. The verified stamp is retried + confirmed; log
+    // the outcome so a persistent LSQ failure is visible in runtime logs rather
+    // than silently leaving the lead marked Unverified in the CRM.
+    const verifyStamp = await updateLeadSquaredToVerified(phone);
+    if (!verifyStamp.delivered) {
+      console.warn(`[verify] mx_OTP_Status=Verified NOT delivered to LSQ (phone=${phone}): ${verifyStamp.reason ?? 'unknown'}`);
+    }
 
     // 4. Save to Local DB (for Admin Portal). If the send route already
     // inserted an Unverified row, just promote it to Verified (and stamp
