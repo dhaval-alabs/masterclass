@@ -300,10 +300,13 @@ export async function POST(req: NextRequest) {
   }
   // Normalize to Meta's _fbc format. LSQ's mx_FBCLID sometimes holds a RAW
   // fbclid (older captures, before the frontend built _fbc) rather than
-  // fb.1.<ts>.<fbclid>; Meta drops a raw fbclid in the fbc field, so wrap it.
+  // fb.<ver>.<ts>.<fbclid>; Meta drops a raw fbclid in the fbc field, so wrap it.
+  // The version digit follows the click-id format: encrypted "PA…" click ids are
+  // version 2, classic fbclids are version 1 — a mismatched envelope is dropped.
   if (fbc && !fbc.startsWith('fb.')) {
     const ts = after.ModifiedOn ? Date.parse(after.ModifiedOn) : Date.now();
-    fbc = `fb.1.${Number.isFinite(ts) ? ts : Date.now()}.${fbc}`;
+    const ver = fbc.startsWith('PA') ? '2' : '1';
+    fbc = `fb.${ver}.${Number.isFinite(ts) ? ts : Date.now()}.${fbc}`;
   }
 
   const userData: MetaUserData = {
