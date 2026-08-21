@@ -57,6 +57,23 @@ function readCookie(name: string): string | undefined {
   return match ? decodeURIComponent(match[1]) : undefined;
 }
 
+// Resolve the Meta _fbc value for CAPI. Prefer the real _fbc cookie (set by the
+// Pixel from the fbclid). When it's absent — ad blocker, pixel slow to fire, or
+// a return/cross-page visit where the cookie was never written — BUILD a
+// spec-valid fbc from the raw fbclid we captured: fb.1.<capture_ts_ms>.<fbclid>.
+// Meta accepts this and it recovers the ~1-in-6 ad clicks that had no _fbc
+// cookie. Returns undefined only when there is genuinely no click id (organic).
+function resolveFbc(fbclid: string | null | undefined): string | undefined {
+  const cookie = readCookie('_fbc');
+  if (cookie) return cookie;
+  const id = (fbclid || '').trim();
+  if (!id) return undefined;
+  if (id.startsWith('fb.')) return id; // already a full _fbc value
+  let ts = Date.now();
+  try { const s = localStorage.getItem('fbclid_ts'); if (s && Number(s)) ts = Number(s); } catch { /* storage unavailable */ }
+  return `fb.1.${ts}.${id}`;
+}
+
 function newEventId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -219,13 +236,18 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
       gclidRef.current = gclid;
       sessionStorage.setItem("gclid", gclid);
     }
-    // Meta click id — persist across the session like gclid. The _fbc cookie
-    // (set by the Pixel from this) is the preferred CAPI value, but we keep the
-    // raw fbclid too in case the cookie hasn't been written yet.
-    const fbclid = params.get("fbclid") || sessionStorage.getItem("fbclid");
+    // Meta click id — persist in localStorage (NOT sessionStorage) so a returning
+    // ad-clicker in a new tab or later visit doesn't lose attribution. The _fbc
+    // cookie (set by the Pixel) is the preferred CAPI value, but we keep the raw
+    // fbclid + the time we first saw it so resolveFbc() can BUILD a valid _fbc
+    // when the cookie was never written. (sessionStorage read kept for migration.)
+    const fbclid = params.get("fbclid") || localStorage.getItem("fbclid") || sessionStorage.getItem("fbclid");
     if (fbclid) {
       fbclidRef.current = fbclid;
-      sessionStorage.setItem("fbclid", fbclid);
+      try {
+        localStorage.setItem("fbclid", fbclid);
+        if (!localStorage.getItem("fbclid_ts")) localStorage.setItem("fbclid_ts", String(Date.now()));
+      } catch { /* storage unavailable — fbclidRef still carries it for this session */ }
     }
 
     // Pre-fill City from Vercel edge geolocation (IP → city, no permission prompt).
@@ -288,7 +310,7 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
     behaviourSnapshotRef.current = getBehaviourSnapshot();
     leadEventIdRef.current = newEventId();
     const fbp = readCookie('_fbp');
-    const fbc = readCookie('_fbc');
+    const fbc = resolveFbc(fbclidRef.current);
 
     // Fire Lead pixel immediately — form is valid and the user has committed.
     const nameParts = normalizedName.split(' ');
@@ -353,7 +375,7 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
     setError('');
     try {
       const fbp = readCookie('_fbp');
-      const fbc = readCookie('_fbc');
+      const fbc = resolveFbc(fbclidRef.current);
       const res = await fetch('/api/otp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -423,7 +445,7 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
     try {
       const completeEventId = newEventId();
       const fbp = readCookie('_fbp');
-      const fbc = readCookie('_fbc');
+      const fbc = resolveFbc(fbclidRef.current);
 
       const res = await fetch("/api/otp/verify", {
         method: "POST",
