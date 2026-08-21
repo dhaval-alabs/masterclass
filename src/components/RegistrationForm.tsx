@@ -57,10 +57,19 @@ function readCookie(name: string): string | undefined {
   return match ? decodeURIComponent(match[1]) : undefined;
 }
 
+// Meta's _fbc envelope is `fb.<version>.<ts>.<clickid>`. The version digit is
+// tied to the click ID FORMAT, not always 1: classic fbclids are version 1, but
+// the newer encrypted "PA…"-prefixed click IDs are version 2. Wrapping a PA…
+// click id in an fb.1 envelope makes Meta under-match or drop it, so pick the
+// version from the id itself.
+function fbcVersionFor(clickId: string): '1' | '2' {
+  return clickId.startsWith('PA') ? '2' : '1';
+}
+
 // Resolve the Meta _fbc value for CAPI. Prefer the real _fbc cookie (set by the
 // Pixel from the fbclid). When it's absent — ad blocker, pixel slow to fire, or
 // a return/cross-page visit where the cookie was never written — BUILD a
-// spec-valid fbc from the raw fbclid we captured: fb.1.<capture_ts_ms>.<fbclid>.
+// spec-valid fbc from the raw fbclid we captured: fb.<ver>.<capture_ts_ms>.<id>.
 // Meta accepts this and it recovers the ~1-in-6 ad clicks that had no _fbc
 // cookie. Returns undefined only when there is genuinely no click id (organic).
 function resolveFbc(fbclid: string | null | undefined): string | undefined {
@@ -71,7 +80,7 @@ function resolveFbc(fbclid: string | null | undefined): string | undefined {
   if (id.startsWith('fb.')) return id; // already a full _fbc value
   let ts = Date.now();
   try { const s = localStorage.getItem('fbclid_ts'); if (s && Number(s)) ts = Number(s); } catch { /* storage unavailable */ }
-  return `fb.1.${ts}.${id}`;
+  return `fb.${fbcVersionFor(id)}.${ts}.${id}`;
 }
 
 function newEventId(): string {

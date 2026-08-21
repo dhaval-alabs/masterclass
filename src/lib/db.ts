@@ -808,9 +808,12 @@ export async function getLatestFbcForContact(
     let fbc = row.fbc && String(row.fbc).trim() ? String(row.fbc) : null;
     // Rebuild a spec-valid fbc from a stored raw fbclid (older captures that
     // never had an _fbc cookie). Use the registration time as the fbc timestamp.
+    // Version digit follows the click-id format: encrypted "PA…" click ids are
+    // version 2, classic fbclids are version 1 — a mismatched envelope is dropped.
     if (!fbc && row.fbclid) {
       const ts = row.created_at ? Date.parse(row.created_at) : Date.now();
-      fbc = `fb.1.${Number.isFinite(ts) ? ts : Date.now()}.${row.fbclid}`;
+      const ver = String(row.fbclid).startsWith('PA') ? '2' : '1';
+      fbc = `fb.${ver}.${Number.isFinite(ts) ? ts : Date.now()}.${row.fbclid}`;
     }
     return { fbc, fbp: row.fbp ?? null };
   } catch (err) {
