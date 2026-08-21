@@ -19,6 +19,46 @@ function lsqCaptureUrl(): string {
   return `https://api-in21.leadsquared.com/v2/LeadManagement.svc/Lead.Capture?accessKey=${requireEnv('LSQ_ACCESS')}&secretKey=${requireEnv('LSQ_SECRET')}`;
 }
 
+// ── LeadSquared Lead.Capture with retry + delivery confirmation ──────────────
+// LSQ is the CRM system-of-record for the lead. This write used to be
+// fire-and-forget (single attempt, no retry, no delivery confirmation), so a
+// transient LSQ outage silently dropped the CRM record even though the lead was
+// safely stored in our own DB — leaving some registrants without a complete CRM
+// activity record. Retry a few times with backoff and return a definitive
+// delivered/failed outcome that the caller logs and surfaces.
+async function captureLeadInLsqWithRetry(
+  payload: unknown,
+  registrationId: string | null,
+  maxAttempts = 3,
+): Promise<{ ok: boolean; status: number | null; attempts: number; error?: string }> {
+  let lastStatus: number | null = null;
+  let lastError: string | undefined;
+  let attempt = 0;
+  while (attempt < maxAttempts) {
+    attempt++;
+    try {
+      const res = await fetch(lsqCaptureUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      lastStatus = res.status;
+      if (res.ok) {
+        console.log(`[LSQ] capture delivered on attempt ${attempt}/${maxAttempts} (reg=${registrationId ?? 'n/a'})`);
+        return { ok: true, status: res.status, attempts: attempt };
+      }
+      lastError = `HTTP ${res.status}`;
+      // 4xx (bad payload / bad key) will not succeed on retry — stop early.
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) break;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+    if (attempt < maxAttempts) await new Promise((r) => setTimeout(r, 400 * attempt)); // 400ms, then 800ms backoff
+  }
+  console.error(`[LSQ] capture FAILED after ${attempt} attempt(s) (reg=${registrationId ?? 'n/a'}): ${lastError ?? lastStatus}`);
+  return { ok: false, status: lastStatus, attempts: attempt, error: lastError };
+}
+
 let sheetsTokenCache: { token: string; expiresAt: number } | null = null;
 async function getGoogleSheetsToken(clientEmail: string, privateKey: string): Promise<string> {
   if (sheetsTokenCache && Date.now() < sheetsTokenCache.expiresAt) return sheetsTokenCache.token;
@@ -209,19 +249,17 @@ export async function POST(req: NextRequest) {
     if (gclidValue)  lsqPayload.push({ Attribute: 'mx_GCLID', Value: gclidValue });
     if (fbclidValue) lsqPayload.push({ Attribute: process.env.LSQ_FBCLID_FIELD || 'mx_FBCLID', Value: fbclidValue });
 
-    // 3. Fire LSQ + Sheets in parallel (non-blocking to the user)
-    await Promise.allSettled([
-      fetch(lsqCaptureUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(lsqPayload),
-      }).then(res => {
-        if (!res.ok) console.error('[LSQ] Capture failed:', res.status);
-      }),
+    // 3. Fire LSQ (with retry + delivery confirmation) + Sheets in parallel.
+    // The lead is already persisted in our own DB above, so the response never
+    // depends on LSQ; but we DO await the retrying capture so the attempts
+    // actually complete on serverless (a non-awaited background fetch can be
+    // killed after the response returns) and so we can report delivery.
+    const [lsqResult] = await Promise.all([
+      captureLeadInLsqWithRetry(lsqPayload, registrationId),
       pushToGoogleSheets(body, phone),
     ]);
 
-    return NextResponse.json({ success: true, registrationId, leadEventId });
+    return NextResponse.json({ success: true, registrationId, leadEventId, lsqDelivered: lsqResult.ok });
 
   } catch (error) {
     console.error('Lead capture error:', error);
