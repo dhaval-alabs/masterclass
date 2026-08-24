@@ -145,11 +145,19 @@ export async function POST(request: Request) {
     // 2. Pull verified registrations for THIS session only.
     const registrations = await getVerifiedRegistrationsForAttendanceSync(targetSession.id);
 
-    // 3. Meta event name: per user's preference we use BOTH a suffixed event
-    // name (e.g. WebinarAttended_W001) AND put the session code in
-    // custom_data, so audiences can be built either way.
+    // 3. Meta event name. DEFAULT: a single base event (e.g. WebinarAttended)
+    // for ALL cohorts, so attendance accumulates under one event — it stays
+    // "Active" in Events Manager, grows large enough to seed a lookalike, and is
+    // usable for conversion optimization. Per-session naming (WebinarAttended_W008)
+    // split volume across a new event every webinar: each got one small burst
+    // (~30-50) then went Inactive, and was too small to seed anything.
+    // The session is ALWAYS carried in custom_data (webinar_session_code/title)
+    // below, so per-cohort segmentation still works. Set
+    // META_ATTENDED_SUFFIX_EVENTS=1 to revert to per-session event names if you
+    // specifically want audiences keyed by the event name itself.
+    const suffixEvents = process.env.META_ATTENDED_SUFFIX_EVENTS === '1';
     const suffix = (targetSession.metaEventSuffix || targetSession.code || '').trim();
-    const metaEventName = suffix ? `${META_EVENT_NAME_BASE}_${suffix}` : META_EVENT_NAME_BASE;
+    const metaEventName = (suffixEvents && suffix) ? `${META_EVENT_NAME_BASE}_${suffix}` : META_EVENT_NAME_BASE;
 
     // 4. Process each registration. We update DB sequentially to keep error
     // handling simple — the typical webinar has ≤500 attendees, so this is
