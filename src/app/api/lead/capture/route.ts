@@ -217,7 +217,9 @@ export async function POST(req: NextRequest) {
     // derives the schema name from the display name on save (usually mx_FBCLID).
     const gclidValue  = body.gclid || '';
     const fbclidValue = body.fbc || body.fbclid || '';
-    if (gclidValue)  lsqPayload.push({ Attribute: 'mx_GCLID', Value: gclidValue });
+    // GCLID schema name is `mx_gclid` (verified against LSQ metadata) — the old
+    // `mx_GCLID` did not match a real schema name and was silently dropped.
+    if (gclidValue)  lsqPayload.push({ Attribute: process.env.LSQ_GCLID_FIELD || 'mx_gclid', Value: gclidValue });
     if (fbclidValue) lsqPayload.push({ Attribute: process.env.LSQ_FBCLID_FIELD || 'mx_FBCLID', Value: fbclidValue });
 
     // Campaign / TOPIC attribution → LSQ SourceCampaign.
@@ -245,15 +247,38 @@ export async function POST(req: NextRequest) {
       lsqPayload.push({ Attribute: process.env.LSQ_CAMPAIGN_FIELD || 'SourceCampaign', Value: campaignValue });
     }
 
-    // Also mirror the RAW utm_campaign into LSQ's dedicated UTM field
-    // (mx_UTM_Campaign). SourceCampaign above carries the session fallback for
-    // organic traffic; mx_UTM_Campaign is the literal UTM param and must stay
-    // empty when there was none — so it's written ONLY when a real utm_campaign
-    // is present. This is the field the audience/reporting pipeline reads for
-    // paid-campaign attribution; it was never populated at intake. Field name is
-    // env-configurable (schema name confirmed as mx_UTM_Campaign in LSQ).
-    if (utmCampaign) {
-      lsqPayload.push({ Attribute: process.env.LSQ_UTM_CAMPAIGN_FIELD || 'mx_UTM_Campaign', Value: utmCampaign });
+    // Full UTM set → LSQ, so every registration is traceable back to the exact
+    // ad source/medium/campaign/content/term that drove it (the "CRM tagging at
+    // intake" gap: a new campaign's leads couldn't be traced via SourceCampaign
+    // or UTM once it launched). Written to BOTH the standard Source* fields and
+    // the dedicated UTM custom fields, each ONLY when the value is present — the
+    // UTM fields are the literal params and must stay empty when there was none.
+    //
+    // IMPORTANT — the custom UTM fields' real SchemaName is DOUBLE-prefixed
+    // (mx_mx_UTM_*), NOT mx_UTM_*: LSQ prepends another "mx_" when a field's
+    // display name already starts with "mx_". Writing to mx_UTM_* silently
+    // no-ops (this was a real bug). All names below verified against LSQ
+    // LeadsMetaData; each is env-overridable.
+    const utmMedium  = (typeof body.utm_medium  === 'string' ? body.utm_medium.trim()  : '');
+    const utmContent = (typeof body.utm_content === 'string' ? body.utm_content.trim() : '');
+    const utmTerm    = (typeof body.utm_term    === 'string' ? body.utm_term.trim()    : '');
+    // The form defaults utm_source to "direct" when there's no param — treat that
+    // as absent so we don't stamp every organic lead's UTM source as "direct".
+    const rawUtmSource = (typeof body.utm_source === 'string' ? body.utm_source.trim() : '');
+    const utmSource = rawUtmSource && rawUtmSource.toLowerCase() !== 'direct' ? rawUtmSource : '';
+
+    const utmWrites: Array<[string, string]> = [
+      [process.env.LSQ_UTM_SOURCE_FIELD   || 'mx_mx_UTM_Source',   utmSource],
+      [process.env.LSQ_UTM_MEDIUM_FIELD   || 'mx_mx_UTM_Medium',   utmMedium],
+      [process.env.LSQ_UTM_CAMPAIGN_FIELD || 'mx_mx_UTM_Campaign', utmCampaign],
+      [process.env.LSQ_UTM_CONTENT_FIELD  || 'mx_mx_UTM_Content',  utmContent],
+      [process.env.LSQ_UTM_TERM_FIELD     || 'mx_mx_UTM_Term',     utmTerm],
+      // Standard LSQ source fields (SourceCampaign handled above with fallback).
+      ['SourceMedium',  utmMedium],
+      ['SourceContent', utmContent],
+    ];
+    for (const [attr, val] of utmWrites) {
+      if (val) lsqPayload.push({ Attribute: attr, Value: val });
     }
 
     // 3. Fire LSQ (with retry + delivery confirmation) + Sheets in parallel.
