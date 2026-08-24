@@ -220,6 +220,31 @@ export async function POST(req: NextRequest) {
     if (gclidValue)  lsqPayload.push({ Attribute: 'mx_GCLID', Value: gclidValue });
     if (fbclidValue) lsqPayload.push({ Attribute: process.env.LSQ_FBCLID_FIELD || 'mx_FBCLID', Value: fbclidValue });
 
+    // Campaign / TOPIC attribution → LSQ SourceCampaign.
+    // Which masterclass topic a lead came in on (Excel to AI vs College to AI vs
+    // Career Compass) was never written to the CRM: the LP is a SINGLE URL whose
+    // active session is swapped server-side, `sourceName` is hardcoded to
+    // 'ExcelToAI_Masterclass', and utm_campaign was forwarded only to Sheets — so
+    // LSQ had no reliable per-topic key to segment on (this is why topic-specific
+    // Customer Lists / lookalikes couldn't be built). Populate SourceCampaign so
+    // segmentation is reliable GOING FORWARD (not retroactive — old leads stay
+    // unlabeled).
+    //   Primary : utm_campaign — the exact paid campaign the click came from,
+    //             which encodes the topic (e.g. B2_CollegeToAI_Masterclass_Jun21).
+    //   Fallback: the active session identifier, so organic/direct leads (no utm)
+    //             are still tagged with whichever topic was live at registration.
+    // Most-recent-wins on re-registration (Lead.Capture upserts) — this reflects
+    // the lead's current topic interest. Field name is env-configurable because
+    // the CRM's schema name may differ (mirrors LSQ_FBCLID_FIELD).
+    const utmCampaign = (typeof body.utm_campaign === 'string' ? body.utm_campaign.trim() : '');
+    const campaignValue = utmCampaign
+      || config?.activeSessionCode
+      || config?.activeSessionMetaEventSuffix
+      || '';
+    if (campaignValue) {
+      lsqPayload.push({ Attribute: process.env.LSQ_CAMPAIGN_FIELD || 'SourceCampaign', Value: campaignValue });
+    }
+
     // 3. Fire LSQ (with retry + delivery confirmation) + Sheets in parallel.
     // The lead is already persisted in our own DB above, so the response never
     // depends on LSQ; but we DO await the retrying capture so the attempts
