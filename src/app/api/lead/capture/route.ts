@@ -245,6 +245,17 @@ export async function POST(req: NextRequest) {
       lsqPayload.push({ Attribute: process.env.LSQ_CAMPAIGN_FIELD || 'SourceCampaign', Value: campaignValue });
     }
 
+    // Also mirror the RAW utm_campaign into LSQ's dedicated UTM field
+    // (mx_UTM_Campaign). SourceCampaign above carries the session fallback for
+    // organic traffic; mx_UTM_Campaign is the literal UTM param and must stay
+    // empty when there was none — so it's written ONLY when a real utm_campaign
+    // is present. This is the field the audience/reporting pipeline reads for
+    // paid-campaign attribution; it was never populated at intake. Field name is
+    // env-configurable (schema name confirmed as mx_UTM_Campaign in LSQ).
+    if (utmCampaign) {
+      lsqPayload.push({ Attribute: process.env.LSQ_UTM_CAMPAIGN_FIELD || 'mx_UTM_Campaign', Value: utmCampaign });
+    }
+
     // 3. Fire LSQ (with retry + delivery confirmation) + Sheets in parallel.
     // The lead is already persisted in our own DB above, so the response never
     // depends on LSQ; but we DO await the retrying capture so the attempts
