@@ -94,12 +94,27 @@ export async function sendMetaCapiEvent(event: MetaCapiEvent): Promise<CapiResul
     if (event.userData.fbp) user_data.fbp = event.userData.fbp;
     if (event.userData.fbc) user_data.fbc = event.userData.fbc;
 
+    // Meta REJECTS server events whose event_time is more than 7 days in the
+    // past (or in the future) — the whole request fails and nothing lands.
+    // Attendance/backfill events carry the real webinar join time, which is
+    // routinely older than 7 days by the time a sync runs a week+ after the
+    // session, so every WebinarAttended event was being silently dropped. Clamp
+    // into Meta's accepted window: too-old → now (the attendee still lands in
+    // audiences; only the attribution date shifts), future → now. Recent events
+    // (registration, stage changes) pass through unchanged.
+    const nowSec = Math.floor(Date.now() / 1000);
+    const SEVEN_DAYS_SEC = 7 * 24 * 60 * 60;
+    let eventTime = event.eventTime ?? nowSec;
+    if (!Number.isFinite(eventTime) || eventTime > nowSec || eventTime < nowSec - SEVEN_DAYS_SEC) {
+      eventTime = nowSec;
+    }
+
     const payload: Record<string, unknown> = {
       data: [
         {
           event_name: event.eventName,
           event_id: eventId,                                   // guaranteed non-empty (validated above)
-          event_time: event.eventTime ?? Math.floor(Date.now() / 1000),
+          event_time: eventTime,                               // clamped into Meta's 7-day window
           event_source_url: event.eventSourceUrl,
           action_source: event.actionSource ?? 'website',
           user_data,
