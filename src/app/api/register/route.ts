@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { addRegistration, getRegistrationsPaginated, getUniqueRegistrationsPaginated, getRegistrationStats, getActiveWebinarSession } from '@/lib/db';
+import { addRegistration, getRegistrationsPaginated, getUniqueRegistrationsPaginated, getRegistrationStats, getActiveWebinarSession, getWebinarSessionById } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 
 async function requireAdmin(): Promise<boolean> {
@@ -24,11 +24,19 @@ export async function GET(request: Request) {
   // unique=0 to see every raw submission.
   const unique = url.searchParams.get('unique') !== '0';
 
-  // Scope to the active cohort so multiple masterclasses don't mix. Passing
-  // allSessions=1 (admin escape hatch) shows everyone across every session.
+  // Scope to a cohort so multiple masterclasses don't mix. Precedence:
+  //   allSessions=1  → everyone across every session (admin escape hatch)
+  //   sessionId=<id> → a specific (possibly past) cohort — for reviewing/exporting
+  //   default        → the active session
   const allSessions = url.searchParams.get('allSessions') === '1';
-  const activeSession = allSessions ? null : await getActiveWebinarSession();
-  const scopeSessionId = activeSession?.id ?? null;
+  const requestedSessionId = url.searchParams.get('sessionId') || null;
+  let scopeSession: Awaited<ReturnType<typeof getActiveWebinarSession>> = null;
+  if (!allSessions) {
+    scopeSession = requestedSessionId
+      ? await getWebinarSessionById(requestedSessionId)
+      : await getActiveWebinarSession();
+  }
+  const scopeSessionId = scopeSession?.id ?? null;
 
   const [pageRes, stats] = await Promise.all([
     unique
@@ -42,8 +50,9 @@ export async function GET(request: Request) {
     ...(stats ? { stats } : {}),
     scope: {
       allSessions,
-      sessionCode: activeSession?.code ?? null,
-      sessionTitle: activeSession?.title ?? null,
+      sessionId: scopeSession?.id ?? null,
+      sessionCode: scopeSession?.code ?? null,
+      sessionTitle: scopeSession?.title ?? null,
     },
   });
 }
