@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { getRegistrationsPaginated } from '@/lib/db';
+import { getRegistrationsPaginated, getActiveWebinarSession } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
@@ -22,9 +22,16 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const scoreFilter = searchParams.get('score') ?? undefined;
-  const sessionId = searchParams.get('sessionId') ?? undefined;
   const attendedFilter = searchParams.get('attended') ?? undefined;
   const statusFilter = searchParams.get('regStatus') ?? undefined;
+  // Scope (mirrors the list view): allSessions=1 → everyone; sessionId=<id> → a
+  // specific cohort; default → the active session (NOT everyone) so an export
+  // matches what the admin sees on screen.
+  const allSessions = searchParams.get('allSessions') === '1';
+  let sessionId = searchParams.get('sessionId') ?? undefined;
+  if (!allSessions && !sessionId) {
+    sessionId = (await getActiveWebinarSession())?.id ?? undefined;
+  }
 
   try {
     // getRegistrationsPaginated clamps pageSize to 200, so paginate through all pages

@@ -113,8 +113,12 @@ export default function AdminPortal() {
   // Collapse a person's repeat attempts into one row (default on).
   const [regUnique, setRegUnique] = useState(true);
   const [regStats, setRegStats] = useState<{ total: number; verified: number; unverified: number; uniqueEmailsStarted: number; uniqueEmailsVerified: number; hot: number; warm: number; cold: number; junk: number; unscored: number } | null>(null);
-  const [regScope, setRegScope] = useState<{ allSessions: boolean; sessionCode: string | null; sessionTitle: string | null } | null>(null);
-  const [regAllSessions, setRegAllSessions] = useState(false);
+  const [regScope, setRegScope] = useState<{ allSessions: boolean; sessionId?: string | null; sessionCode: string | null; sessionTitle: string | null } | null>(null);
+  // Which cohort the Registrations tab is scoped to: '' = active session,
+  // 'all' = every session, or a specific session id (past cohort).
+  const [regSessionSel, setRegSessionSel] = useState<string>('');
+  // Session list for the cohort dropdown (id, code, title).
+  const [regSessions, setRegSessions] = useState<Array<{ id: string; code: string; title: string | null; status?: string | null }>>([]);
 
   // Chat transcript modal
   const [transcriptModal, setTranscriptModal] = useState<{ name: string; conversation: Array<{ role: string; content: string }> } | null>(null);
@@ -184,15 +188,27 @@ export default function AdminPortal() {
   useEffect(() => {
     // Fetch Settings
     fetch('/api/settings').then(res => res.json()).then(data => setSettings(data));
+    // Fetch session list for the Registrations cohort dropdown.
+    fetch('/api/admin/sessions')
+      .then(res => (res.ok ? res.json() : []))
+      .then((s: Array<{ id: string; code: string; title: string | null; status?: string | null }>) => {
+        if (Array.isArray(s)) setRegSessions(s.map(x => ({ id: x.id, code: x.code, title: x.title, status: x.status })));
+      })
+      .catch(() => {});
   }, []);
 
-  const loadRegistrations = (page = regPage, pageSize = regPageSize, scoreFilter = regScoreFilter, unique = regUnique, attendedFilter = regAttendedFilter, statusFilter = regStatusFilter, allSessions = regAllSessions) => {
+  const loadRegistrations = (page = regPage, pageSize = regPageSize, scoreFilter = regScoreFilter, unique = regUnique, attendedFilter = regAttendedFilter, statusFilter = regStatusFilter, sessionSel = regSessionSel) => {
     setIsLoadingRegs(true);
     const scoreParam = scoreFilter ? `&score=${encodeURIComponent(scoreFilter)}` : '';
     const attendedParam = attendedFilter ? `&attended=${encodeURIComponent(attendedFilter)}` : '';
     const statusParam = statusFilter ? `&regStatus=${encodeURIComponent(statusFilter)}` : '';
-    const allSessionsParam = allSessions ? `&allSessions=1` : '';
-    fetch(`/api/register?page=${page}&pageSize=${pageSize}&stats=1&unique=${unique ? 1 : 0}${scoreParam}${attendedParam}${statusParam}${allSessionsParam}`)
+    // '' = active cohort (no param), 'all' = every session, else a specific session id.
+    const sessionParam = sessionSel === 'all'
+      ? `&allSessions=1`
+      : sessionSel
+        ? `&sessionId=${encodeURIComponent(sessionSel)}`
+        : '';
+    fetch(`/api/register?page=${page}&pageSize=${pageSize}&stats=1&unique=${unique ? 1 : 0}${scoreParam}${attendedParam}${statusParam}${sessionParam}`)
       .then(res => res.json())
       .then((res: { data: any[]; total: number; stats?: typeof regStats; scope?: typeof regScope }) => {
         setRegistrations(Array.isArray(res?.data) ? res.data : []);
@@ -266,12 +282,16 @@ export default function AdminPortal() {
       .finally(() => setIsCheckingGemini(false));
   };
 
-  // CSV export — mirrors the active table filters.
+  // CSV export — mirrors the active table filters AND the selected cohort, so
+  // "export" gives exactly what's on screen (active session, a past session, or
+  // all sessions).
   const handleExport = () => {
     const params = new URLSearchParams();
     if (regScoreFilter) params.set('score', regScoreFilter);
     if (regAttendedFilter) params.set('attended', regAttendedFilter);
     if (regStatusFilter) params.set('regStatus', regStatusFilter);
+    if (regSessionSel === 'all') params.set('allSessions', '1');
+    else if (regSessionSel) params.set('sessionId', regSessionSel);
     window.open(`/api/admin/registrations/export?${params.toString()}`, '_blank');
   };
 
@@ -829,13 +849,13 @@ export default function AdminPortal() {
               {regScope?.allSessions && (
                 <div className="mb-4 flex items-center justify-between gap-2 text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-200 rounded-lg px-3 py-2">
                   <span className="flex items-center gap-2"><Layers className="w-3.5 h-3.5" /> Showing <span className="font-bold">all sessions</span> combined (every cohort).</span>
-                  <button onClick={() => { setRegAllSessions(false); setRegPage(1); loadRegistrations(1, regPageSize, regScoreFilter, regUnique, regAttendedFilter, regStatusFilter, false); }} className="underline hover:text-[#003368]">Show active cohort only</button>
+                  <button onClick={() => { setRegSessionSel(''); setRegPage(1); loadRegistrations(1, regPageSize, regScoreFilter, regUnique, regAttendedFilter, regStatusFilter, ''); }} className="underline hover:text-[#003368]">Show active cohort only</button>
                 </div>
               )}
               {regScope && !regScope.allSessions && regScope.sessionCode && (
                 <div className="mb-4 flex items-center justify-between gap-2 text-xs font-semibold text-[#003368] bg-[#00DF83]/10 border border-[#00DF83]/30 rounded-lg px-3 py-2">
-                  <span className="flex items-center gap-2"><Layers className="w-3.5 h-3.5" /> Showing the active cohort: <span className="font-bold">{regScope.sessionTitle || regScope.sessionCode}</span> ({regScope.sessionCode}). Registrations, stats, campaigns &amp; analytics are scoped to this session.</span>
-                  <button onClick={() => { setRegAllSessions(true); setRegPage(1); loadRegistrations(1, regPageSize, regScoreFilter, regUnique, regAttendedFilter, regStatusFilter, true); }} className="underline hover:opacity-70 shrink-0">View all sessions</button>
+                  <span className="flex items-center gap-2"><Layers className="w-3.5 h-3.5" /> Showing {regSessionSel ? 'cohort' : 'the active cohort'}: <span className="font-bold">{regScope.sessionTitle || regScope.sessionCode}</span> ({regScope.sessionCode}). Registrations, stats &amp; export are scoped to this session.</span>
+                  <button onClick={() => { setRegSessionSel('all'); setRegPage(1); loadRegistrations(1, regPageSize, regScoreFilter, regUnique, regAttendedFilter, regStatusFilter, 'all'); }} className="underline hover:opacity-70 shrink-0">View all sessions</button>
                 </div>
               )}
               {regScope && !regScope.allSessions && !regScope.sessionCode && (
@@ -963,6 +983,26 @@ export default function AdminPortal() {
 
               {/* Score filter + breakdown toggle */}
               <div className="flex items-center gap-3 mb-4 flex-wrap">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Cohort</label>
+                <select
+                  value={regSessionSel}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setRegSessionSel(v);
+                    setRegPage(1);
+                    loadRegistrations(1, regPageSize, regScoreFilter, regUnique, regAttendedFilter, regStatusFilter, v);
+                  }}
+                  className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-700 max-w-[260px]"
+                  title="View / export registrations for a specific webinar cohort (past or active), or all sessions"
+                >
+                  <option value="">Active session</option>
+                  {regSessions.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.code}{s.status === 'active' ? ' (active)' : ''} — {s.title || 'Untitled'}
+                    </option>
+                  ))}
+                  <option value="all">All sessions (combined)</option>
+                </select>
                 <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Filter by score</label>
                 <select
                   value={regScoreFilter}
