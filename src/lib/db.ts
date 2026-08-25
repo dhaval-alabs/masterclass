@@ -1995,7 +1995,7 @@ export async function createWebinarSession(input: {
       time_label: input.timeLabel ?? null,
       datetime_utc: input.datetimeUtc ?? null,
       duration_label: input.durationLabel ?? null,
-      zoom_webinar_id: input.zoomWebinarId ?? null,
+      zoom_webinar_id: input.zoomWebinarId?.replace(/\D/g, '') || null, // digits only — spaced Zoom IDs break registration
       whatsapp_template_name: input.whatsappTemplateName ?? null,
       lsq_source_name: input.lsqSourceName ?? null,
       // Default the Meta event suffix to the session code if not provided —
@@ -2088,7 +2088,7 @@ export async function updateWebinarSession(
   if (patch.timeLabel !== undefined) dbPatch.time_label = patch.timeLabel;
   if (patch.datetimeUtc !== undefined) dbPatch.datetime_utc = patch.datetimeUtc;
   if (patch.durationLabel !== undefined) dbPatch.duration_label = patch.durationLabel;
-  if (patch.zoomWebinarId !== undefined) dbPatch.zoom_webinar_id = patch.zoomWebinarId;
+  if (patch.zoomWebinarId !== undefined) dbPatch.zoom_webinar_id = patch.zoomWebinarId?.replace(/\D/g, '') || null; // digits only — spaced Zoom IDs break registration
   if (patch.whatsappTemplateName !== undefined) dbPatch.whatsapp_template_name = patch.whatsappTemplateName;
   if (patch.lsqSourceName !== undefined) dbPatch.lsq_source_name = patch.lsqSourceName;
   if (patch.metaEventSuffix !== undefined) dbPatch.meta_event_suffix = patch.metaEventSuffix;
