@@ -78,9 +78,14 @@ export async function POST(request: Request) {
     // Resolve which session we're syncing. Admin UI passes `sessionId` to
     // sync a specific (possibly past) cohort; default is the active session.
     let targetSessionId: string | null = null;
+    let force = false;
     try {
       const body = await request.json().catch(() => ({}));
       if (typeof body?.sessionId === 'string') targetSessionId = body.sessionId;
+      // force: re-fire Meta CAPI even for rows already flagged as fired. Needed to
+      // recover attendees whose event Meta accepted (200 → flag set) but then held
+      // for review / blocked, so it never counted. Safe — deduped by event_id.
+      if (body?.force === true) force = true;
     } catch { /* no body — use active */ }
 
     const targetSession = targetSessionId
@@ -195,8 +200,12 @@ export async function POST(request: Request) {
         continue;
       }
 
-      // 4a. Fire Meta CAPI — but only once per registration (idempotent).
-      if (!reg.metaAttendedEventFired) {
+      // 4a. Fire Meta CAPI — once per registration (idempotent), UNLESS `force`
+      // is set, which re-fires even already-flagged rows. Needed to recover
+      // attendees whose event Meta accepted (200, so the flag was set) but then
+      // held/blocked for review, so it never counted. Deterministic event_id
+      // (`attended_<id>`) means Meta dedups anything that genuinely landed.
+      if (force || !reg.metaAttendedEventFired) {
         const nameParts = (reg.fullName || '').split(' ').filter(Boolean);
         // Deterministic event_id so re-running this sync won't double-count
         // even if the DB flag failed to write last time.

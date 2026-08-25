@@ -332,13 +332,20 @@ export default function AdminPortal() {
     }
   };
 
-  const handleSyncAttendance = async () => {
+  const handleSyncAttendance = async (force = false) => {
     if (isSyncingAttendance) return;
-    if (!confirm('Pull attendance from Zoom and fire Meta + LSQ updates? This is safe to re-run — Meta is deduped by event_id.')) return;
+    const msg = force
+      ? 'RE-FIRE all attendees to Meta, including ones already marked as fired? Use this to recover events Meta accepted but held/blocked. Safe — deduped by event_id.'
+      : 'Pull attendance from Zoom and fire Meta + LSQ updates? This is safe to re-run — Meta is deduped by event_id.';
+    if (!confirm(msg)) return;
     setIsSyncingAttendance(true);
     setAttendanceSyncMessage(null);
     try {
-      const res = await fetch('/api/admin/zoom/sync-attendance', { method: 'POST' });
+      const res = await fetch('/api/admin/zoom/sync-attendance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+      });
       const body = await res.json();
       if (!res.ok || !body.success) {
         throw new Error(body.error || `HTTP ${res.status}`);
@@ -841,7 +848,7 @@ export default function AdminPortal() {
                 <h2 className="text-lg font-bold text-[#003368]">Student Registrations</h2>
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={handleSyncAttendance}
+                    onClick={() => handleSyncAttendance(false)}
                     disabled={isSyncingAttendance}
                     className="text-sm bg-[#003368] hover:bg-[#002244] text-white font-semibold py-2 px-4 rounded-lg flex items-center gap-2 disabled:opacity-60"
                     title="Pulls attendees from Zoom Reports API and fires Meta CAPI + LSQ updates. Run ~30 min after webinar ends. Safe to re-run."
@@ -850,6 +857,18 @@ export default function AdminPortal() {
                       <><Loader2 className="w-4 h-4 animate-spin" /> Syncing…</>
                     ) : (
                       'Sync Attendance from Zoom'
+                    )}
+                  </button>
+                  <button
+                    onClick={() => handleSyncAttendance(true)}
+                    disabled={isSyncingAttendance}
+                    className="text-sm bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold py-2 px-4 rounded-lg flex items-center gap-2 disabled:opacity-60"
+                    title="Re-fire ALL attendees to Meta, including ones already marked as fired. Use to recover events Meta accepted but held/blocked (e.g. after switching to the single WebinarAttended event). Safe — deduped by event_id."
+                  >
+                    {isSyncingAttendance ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Syncing…</>
+                    ) : (
+                      'Re-fire to Meta (force)'
                     )}
                   </button>
                   <button
