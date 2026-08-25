@@ -18,6 +18,12 @@ const FROM = process.env.RESEND_FROM_EMAIL ?? 'onboarding@resend.dev';
 // POST /api/cron/process-email-queue
 // Called by Vercel Cron every 5 minutes. Sends all queue items whose
 // scheduled_for has passed and marks them sent or failed.
+// Vercel Cron invokes cron paths with GET, so accept GET too (delegates to POST).
+// Without this, the scheduled job 405s every tick and the queue never drains.
+export function GET(req: NextRequest) {
+  return POST(req);
+}
+
 export async function POST(req: NextRequest) {
   const auth = req.headers.get('authorization');
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
