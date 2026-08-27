@@ -993,11 +993,22 @@ export async function saveConversation(
  */
 export async function getUnscoredVerifiedRegistrations(
   limit = 5,
-): Promise<Array<{ id: string; conversation: Array<{ role: string; content: string }> }>> {
+): Promise<Array<{
+  id: string;
+  conversation: Array<{ role: string; content: string }>;
+  fullName: string | null;
+  email: string | null;
+  phone: string | null;
+  city: string | null;
+  fbc: string | null;
+  fbp: string | null;
+}>> {
   try {
     const { data, error } = await client()
       .from('registrations')
-      .select('id, chat_conversation')
+      // Include the identity fields so the recovery path can re-fire the Meta
+      // QualifiedLead CAPI event (not just write the DB score).
+      .select('id, chat_conversation, full_name, email, phone, city, fbc, fbp')
       .eq('status', 'Verified')
       .is('lead_score', null)
       .not('chat_conversation', 'is', null)
@@ -1006,7 +1017,16 @@ export async function getUnscoredVerifiedRegistrations(
     if (error) throw error;
     return (data ?? [])
       .filter(r => Array.isArray(r.chat_conversation) && r.chat_conversation.length > 0)
-      .map(r => ({ id: r.id as string, conversation: r.chat_conversation }));
+      .map(r => ({
+        id: r.id as string,
+        conversation: r.chat_conversation,
+        fullName: (r.full_name as string) ?? null,
+        email: (r.email as string) ?? null,
+        phone: (r.phone as string) ?? null,
+        city: (r.city as string) ?? null,
+        fbc: (r.fbc as string) ?? null,
+        fbp: (r.fbp as string) ?? null,
+      }));
   } catch (err) {
     console.error('[db.getUnscoredVerifiedRegistrations]', err);
     return [];

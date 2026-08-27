@@ -976,7 +976,7 @@ export default function AdminPortal() {
                     <StatCard label="Warm leads" value={regStats.warm} tone="amber" hint="Moderate intent — nurture" />
                     <StatCard label="Cold leads" value={regStats.cold} hint="Low urgency — drip sequence" />
                     <StatCard label="Junk" value={regStats.junk} hint="Dropped — bot or fake" />
-                    <StatCard label="Not yet scored" value={regStats.unscored} hint="Verified but chat not completed" />
+                    <StatCard label="Not yet scored" value={regStats.unscored} hint="Verified — awaiting AI scoring (or scoring failed; check Gemini Health)" />
                   </div>
                 </>
               )}
