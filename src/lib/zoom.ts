@@ -103,7 +103,11 @@ export async function registerWebinarParticipant(
     const payload: Record<string, string> = {
       email: input.email,
       first_name: firstName,
-      last_name: (input.lastName || '').trim(),
+      // Zoom rejects an empty last_name ("The parameter is required: last_name")
+      // when the webinar's registration form requires it — which silently failed
+      // every single-word registrant (e.g. "Afroze" with no surname). Fall back
+      // to the first name so a mononym still registers.
+      last_name: (input.lastName || '').trim() || firstName,
     };
     const normalizedPhone = normalizePhone(input.phone);
     if (normalizedPhone) payload.phone = normalizedPhone;
