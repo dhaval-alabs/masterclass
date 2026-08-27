@@ -98,8 +98,6 @@ export async function registerWebinarParticipant(
       return { ok: false, error: 'first_name is empty — cannot register with Zoom' };
     }
 
-    const token = await getZoomAccessToken();
-
     const payload: Record<string, string> = {
       email: input.email,
       first_name: firstName,
@@ -113,23 +111,38 @@ export async function registerWebinarParticipant(
     if (normalizedPhone) payload.phone = normalizedPhone;
     if (input.city) payload.city = input.city;
 
-    const res = await fetch(
-      `https://api.zoom.us/v2/webinars/${webinarId}/registrants`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
+    // Retry on TRANSIENT failures (network error, 429 rate-limit, 5xx) — a
+    // verification surge can rate-limit Zoom, and a single attempt permanently
+    // left the lead unregistered with no join link. Permanent 4xx (bad data,
+    // 404 webinar) are NOT retried; a 401 clears the token cache and re-auths.
+    const MAX_ATTEMPTS = 3;
+    let res!: Response;
+    let body: { join_url?: string; registrant_id?: string; id?: string; message?: string } | null = null;
+    let attempt = 0;
+    while (attempt < MAX_ATTEMPTS) {
+      attempt++;
+      try {
+        res = await fetch(
+          `https://api.zoom.us/v2/webinars/${webinarId}/registrants`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${await getZoomAccessToken()}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          },
+        );
+      } catch (netErr) {
+        if (attempt < MAX_ATTEMPTS) { await new Promise(r => setTimeout(r, 400 * attempt)); continue; }
+        throw netErr;
       }
-    );
-
-    const body = await res.json().catch(() => null);
-
-    if (!res.ok) {
+      body = await res.json().catch(() => null);
+      if (res.ok) break;
       // If the token was rejected, clear cache so the next attempt re-auths.
       if (res.status === 401) tokenCache = null;
+      const transient = res.status === 401 || res.status === 429 || res.status >= 500;
+      if (transient && attempt < MAX_ATTEMPTS) { await new Promise(r => setTimeout(r, 400 * attempt)); continue; }
       return { ok: false, error: `Zoom registrant create failed: ${describeZoomError(res.status, body)}` };
     }
 
