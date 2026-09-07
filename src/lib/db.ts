@@ -2291,6 +2291,35 @@ export async function getVerifiedRegistrationsForAttendanceSync(
   }
 }
 
+/**
+ * Attendees to (re)send to Meta, read straight from OUR database.
+ *
+ * The attendance sync can only fire Meta events for people it just matched in
+ * a LIVE Zoom report, so it cannot recover a past webinar: Zoom 404s the report
+ * once the occurrence is gone, and the whole run aborts before any event is
+ * sent. That left every attendee stranded after the phantom-success bug (#28) —
+ * their meta_attended_event_fired was set to true while Meta had actually
+ * dropped the event, so the sync's idempotency guard skips them forever.
+ *
+ * This reads the attendance we already persisted (attended_at, duration) so the
+ * backfill needs no Zoom call at all. `sessionId` undefined/null = every
+ * session; pass an id to scope it to one cohort.
+ */
+export async function getAttendedRegistrationsForMetaBackfill(
+  sessionId?: string | null,
+): Promise<Registration[]> {
+  try {
+    let query = client().from('registrations').select('*').eq('attended', true);
+    if (sessionId) query = query.eq('session_id', sessionId);
+    const { data, error } = await query;
+    if (error) throw error;
+    return (data ?? []).map(mapRegistration);
+  } catch (err) {
+    console.error('[db.getAttendedRegistrationsForMetaBackfill]', err);
+    return [];
+  }
+}
+
 export type AttendanceUpdate = {
   id: string;
   attended: boolean;
