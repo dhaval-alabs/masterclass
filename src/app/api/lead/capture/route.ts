@@ -30,6 +30,82 @@ function captureLeadInLsqWithRetry(payload: unknown, registrationId: string | nu
   return lsqPostWithRetry(lsqCaptureUrl(), payload, 'capture', `reg=${registrationId ?? 'n/a'}`);
 }
 
+/**
+ * Write the lead to LSQ, choosing the endpoint by whether they already exist.
+ *
+ * Lead.Capture alone is not sufficient, for two reasons both confirmed against
+ * the live instance:
+ *
+ *  1. Phone is a lead IDENTIFIER, but Lead.Capture matches on EmailAddress. A
+ *     returning registrant whose phone sits on a lead with a different or
+ *     missing email finds no email match, tries to CREATE, and is rejected with
+ *     MXDuplicateEntryException — returned as HTTP 200 with the error in the
+ *     body, so the whole payload was dropped while the log read "delivered".
+ *
+ *  2. Even when the email DOES match, Lead.Capture returns
+ *     {"Status":"Success","IsCreated":false} and then silently ignores the
+ *     standard Source, SourceCampaign, SourceMedium and SourceContent fields.
+ *     Custom mx_* fields update fine. So every returning registrant kept STALE
+ *     campaign attribution — which is precisely the field paid reporting joins
+ *     spend on.
+ *
+ * Lead.Update by leadId writes both standard and custom fields. So: resolve the
+ * lead by phone first and update it; only fall back to Lead.Capture to create
+ * someone genuinely new. SearchBy=Phone, Lead.CreateOrUpdate and DuplicateCheck
+ * were all tested and do not solve either case.
+ */
+async function findLsqLeadIdByPhone(phone: string): Promise<string | null> {
+  const access = process.env.LSQ_ACCESS;
+  const secret = process.env.LSQ_SECRET;
+  if (!access || !secret || !phone) return null;
+  try {
+    const res = await fetch(
+      `https://api-in21.leadsquared.com/v2/LeadManagement.svc/RetrieveLeadByPhoneNumber?accessKey=${access}&secretKey=${secret}&phone=${encodeURIComponent(phone)}`,
+    );
+    const found = (await res.json().catch(() => null)) as Array<{ ProspectID?: string }> | null;
+    return Array.isArray(found) && found.length ? (found[0]?.ProspectID ?? null) : null;
+  } catch (err) {
+    console.error('[LSQ] phone lookup failed:', err);
+    return null;
+  }
+}
+
+function lsqUpdateUrl(leadId: string): string {
+  return `https://api-in21.leadsquared.com/v2/LeadManagement.svc/Lead.Update?accessKey=${requireEnv('LSQ_ACCESS')}&secretKey=${requireEnv('LSQ_SECRET')}&leadId=${leadId}`;
+}
+
+async function upsertLsqLead(
+  payload: Array<{ Attribute: string; Value: string }>,
+  phone: string,
+  registrationId: string | null,
+): Promise<{ ok: boolean; via: 'update' | 'capture'; error?: string }> {
+  const ctx = `reg=${registrationId ?? 'n/a'}`;
+
+  // Phone identifies the lead being updated, so re-sending it is redundant and
+  // can trip the same identifier conflict we are working around.
+  const updates = payload.filter((a) => a.Attribute !== 'Phone');
+
+  const existingId = await findLsqLeadIdByPhone(phone);
+  if (existingId) {
+    const r = await lsqPostWithRetry(lsqUpdateUrl(existingId), updates, 'capture-update', ctx);
+    return { ok: r.ok, via: 'update', error: r.error };
+  }
+
+  const captured = await captureLeadInLsqWithRetry(payload, registrationId);
+  if (captured.ok) return { ok: true, via: 'capture' };
+
+  // Someone else created them between our lookup and this call, or the phone is
+  // on a lead the lookup could not see. Resolve and update rather than lose it.
+  if (captured.exceptionType === 'MXDuplicateEntryException') {
+    const raced = await findLsqLeadIdByPhone(phone);
+    if (raced) {
+      const r = await lsqPostWithRetry(lsqUpdateUrl(raced), updates, 'capture-update-raced', ctx);
+      return { ok: r.ok, via: 'update', error: r.error };
+    }
+  }
+  return { ok: false, via: 'capture', error: captured.error };
+}
+
 let sheetsTokenCache: { token: string; expiresAt: number } | null = null;
 async function getGoogleSheetsToken(clientEmail: string, privateKey: string): Promise<string> {
   if (sheetsTokenCache && Date.now() < sheetsTokenCache.expiresAt) return sheetsTokenCache.token;
@@ -340,11 +416,18 @@ export async function POST(req: NextRequest) {
     // actually complete on serverless (a non-awaited background fetch can be
     // killed after the response returns) and so we can report delivery.
     const [lsqResult] = await Promise.all([
-      captureLeadInLsqWithRetry(lsqPayload, registrationId),
+      upsertLsqLead(lsqPayload, phone, registrationId),
       pushToGoogleSheets(body, phone),
     ]);
+    if (!lsqResult.ok) {
+      console.error(`[LSQ] lead write FAILED via ${lsqResult.via} — ${lsqResult.error ?? 'unknown'}`);
+    }
 
-    return NextResponse.json({ success: true, registrationId, leadEventId, lsqDelivered: lsqResult.ok });
+    return NextResponse.json({
+      success: true, registrationId, leadEventId,
+      lsqDelivered: lsqResult.ok,
+      lsqVia: lsqResult.via,
+    });
 
   } catch (error) {
     console.error('Lead capture error:', error);
