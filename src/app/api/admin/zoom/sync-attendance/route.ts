@@ -157,12 +157,16 @@ export async function POST(request: Request) {
     // split volume across a new event every webinar: each got one small burst
     // (~30-50) then went Inactive, and was too small to seed anything.
     // The session is ALWAYS carried in custom_data (webinar_session_code/title)
-    // below, so per-cohort segmentation still works. Set
-    // META_ATTENDED_SUFFIX_EVENTS=1 to revert to per-session event names if you
-    // specifically want audiences keyed by the event name itself.
-    const suffixEvents = process.env.META_ATTENDED_SUFFIX_EVENTS === '1';
-    const suffix = (targetSession.metaEventSuffix || targetSession.code || '').trim();
-    const metaEventName = (suffixEvents && suffix) ? `${META_EVENT_NAME_BASE}_${suffix}` : META_EVENT_NAME_BASE;
+    // below, so per-cohort segmentation still works.
+    //
+    // There is deliberately NO env switch back to per-session names. Meta holds
+    // every NEW custom event name for manual confirmation and does not count the
+    // events received while it is pending — and confirming later is not
+    // retroactive. A per-session name is new by construction, so each webinar's
+    // events were being accepted (HTTP 200) and then discarded, which is exactly
+    // how attendance data went missing while our audit log read "meta_fired".
+    // Keeping one stable, already-confirmed event name is what makes this work.
+    const metaEventName = META_EVENT_NAME_BASE;
 
     // 4. Process each registration. We update DB sequentially to keep error
     // handling simple — the typical webinar has ≤500 attendees, so this is
@@ -233,7 +237,7 @@ export async function POST(request: Request) {
             duration_min: matched.durationMin,
             webinar_id: result.webinarId,
             // Session tagging — admins can filter Meta custom audiences by
-            // this even though the event name itself is already suffixed.
+            // this — the event name itself is intentionally not per-session.
             webinar_session_code: targetSession.code,
             webinar_session_title: targetSession.title,
           },
