@@ -16,7 +16,40 @@ export interface LsqWriteResult {
   status: number | null;
   attempts: number;
   error?: string;
+  /**
+   * LSQ's own ExceptionType when it reports an error in the BODY of a 200.
+   * Callers branch on this — notably 'MXDuplicateEntryException', which is not
+   * a transient failure but a signal to update the existing lead instead.
+   */
+  exceptionType?: string;
 }
+
+// LSQ answers HTTP 200 and puts the failure in the body:
+//   {"Status":"Error","ExceptionType":"MXDuplicateEntryException", ...}
+// Treating res.ok as success therefore reports dropped writes as delivered —
+// which is exactly how Lead.Capture silently discarded the entire payload for
+// every registrant whose phone was already in LSQ, while the log said
+// "capture delivered". Parse the body and believe it over the status code.
+function readLsqBodyError(raw: string): { type?: string; message?: string } | null {
+  if (!raw) return null;
+  try {
+    const b = JSON.parse(raw) as { Status?: string; ExceptionType?: string; ExceptionMessage?: string };
+    if (typeof b?.Status === 'string' && b.Status.toLowerCase() === 'error') {
+      return { type: b.ExceptionType, message: b.ExceptionMessage };
+    }
+  } catch {
+    // Non-JSON 200 — nothing to extract; fall through and trust the status.
+  }
+  return null;
+}
+
+// Retrying these will fail identically every time: the payload, not the network,
+// is the problem. Fail fast so the caller can act on it.
+const NON_RETRYABLE_LSQ_EXCEPTIONS = new Set([
+  'MXDuplicateEntryException',
+  'MXInvalidLeadException',
+  'MXInvalidFieldException',
+]);
 
 /**
  * POST a JSON body to an LSQ endpoint with retry + delivery confirmation.
@@ -47,14 +80,25 @@ export async function lsqPostWithRetry(
         body: JSON.stringify(body),
       });
       lastStatus = res.status;
+      const raw = await res.text().catch(() => '');
       if (res.ok) {
-        console.log(`[LSQ] ${label} delivered on attempt ${attempt}/${maxAttempts}${where}`);
-        return { ok: true, status: res.status, attempts: attempt };
+        const bodyErr = readLsqBodyError(raw);
+        if (!bodyErr) {
+          console.log(`[LSQ] ${label} delivered on attempt ${attempt}/${maxAttempts}${where}`);
+          return { ok: true, status: res.status, attempts: attempt };
+        }
+        lastError = `${bodyErr.type ?? 'LSQ error'}: ${bodyErr.message ?? ''}`.trim();
+        if (bodyErr.type && NON_RETRYABLE_LSQ_EXCEPTIONS.has(bodyErr.type)) {
+          console.error(`[LSQ] ${label} REJECTED${where}: ${lastError}`);
+          return { ok: false, status: res.status, attempts: attempt, error: lastError, exceptionType: bodyErr.type };
+        }
+        // Some other in-body error — worth one more try.
+      } else {
+        lastError = `HTTP ${res.status}`;
       }
-      lastError = `HTTP ${res.status}`;
       // 4xx (bad payload / bad key) will not succeed on retry — stop early.
       // 429 (rate limit) IS worth retrying, so it's excluded from the early break.
-      if (res.status >= 400 && res.status < 500 && res.status !== 429) break;
+      if (!res.ok && res.status >= 400 && res.status < 500 && res.status !== 429) break;
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
     }
