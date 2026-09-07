@@ -352,6 +352,8 @@ export default function AdminPortal() {
     }
   };
 
+  const [isBackfillingMeta, setIsBackfillingMeta] = useState(false);
+
   const handleSyncAttendance = async (force = false) => {
     if (isSyncingAttendance) return;
     const msg = force
@@ -381,6 +383,41 @@ export default function AdminPortal() {
       setAttendanceSyncMessage({ kind: 'err', text: err instanceof Error ? err.message : 'Sync failed' });
     } finally {
       setIsSyncingAttendance(false);
+    }
+  };
+
+  // Re-send WebinarAttended for every attendee straight from our DB. Unlike
+  // "Re-fire to Meta (force)" this needs no Zoom report, so it can recover past
+  // cohorts whose Zoom occurrence is gone (the force path aborts on the Zoom 404).
+  const handleMetaBackfill = async () => {
+    if (isBackfillingMeta) return;
+    const scopeLabel = regSessionSel && regSessionSel !== 'all' ? 'this cohort' : 'ALL sessions';
+    if (!confirm(
+      `Re-send WebinarAttended to Meta for ${scopeLabel}, straight from our database (no Zoom needed)?\n\n` +
+      'Use this to recover attendance Meta accepted but dropped. Safe — deduped by event_id.\n\n' +
+      'Note: Meta rejects events older than 7 days, so past attendance lands stamped today. ' +
+      'Good for audiences/lookalikes, but it will not retro-attribute the original ad click.'
+    )) return;
+    setIsBackfillingMeta(true);
+    setAttendanceSyncMessage(null);
+    try {
+      const res = await fetch('/api/admin/meta/backfill-attended', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: regSessionSel || 'all' }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      const failedNote = body.failed ? ` · ${body.failed} FAILED (${(body.errors || []).join(' | ')})` : '';
+      setAttendanceSyncMessage({
+        kind: body.failed ? 'err' : 'ok',
+        text: `Meta backfill (${body.scope}): ${body.sent}/${body.total} sent as ${body.eventName}${failedNote}`,
+      });
+      loadRegistrations(regPage, regPageSize);
+    } catch (err) {
+      setAttendanceSyncMessage({ kind: 'err', text: err instanceof Error ? err.message : 'Backfill failed' });
+    } finally {
+      setIsBackfillingMeta(false);
     }
   };
 
@@ -889,6 +926,18 @@ export default function AdminPortal() {
                       <><Loader2 className="w-4 h-4 animate-spin" /> Syncing…</>
                     ) : (
                       'Re-fire to Meta (force)'
+                    )}
+                  </button>
+                  <button
+                    onClick={handleMetaBackfill}
+                    disabled={isBackfillingMeta}
+                    className="text-sm bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold py-2 px-4 rounded-lg flex items-center gap-2 disabled:opacity-60"
+                    title="Re-send WebinarAttended to Meta from our own database — no Zoom report needed, so it works for past cohorts the force re-fire cannot reach. Deduped by event_id. Past attendance lands stamped today (Meta rejects events older than 7 days)."
+                  >
+                    {isBackfillingMeta ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Backfilling…</>
+                    ) : (
+                      'Backfill Meta attendance'
                     )}
                   </button>
                   <button
