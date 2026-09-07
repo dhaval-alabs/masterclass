@@ -37,4 +37,7 @@ ALTER TABLE excel_to_ai.whatsapp_scheduled_sends
 -- registrant would get the same reminder twice.
 CREATE UNIQUE INDEX IF NOT EXISTS wss_one_reminder_per_reg
   ON excel_to_ai.whatsapp_scheduled_sends (registration_id, trigger)
-  WHERE registration_id IS NOT NULL AND trigger LIKE 'reminder_%';
+  -- Listed explicitly rather than LIKE 'reminder_%': '_' is a single-character
+  -- wildcard in LIKE, so that pattern would also match unrelated future values.
+  WHERE registration_id IS NOT NULL
+    AND trigger IN ('reminder_t3d', 'reminder_t1d', 'reminder_t1h');
