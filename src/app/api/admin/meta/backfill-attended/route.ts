@@ -73,6 +73,10 @@ export async function POST(request: Request) {
     let failed = 0;
     let skipped = 0;
     const errors: string[] = [];
+    // A previous run reported 399/399 sent while Meta's dataset received none of
+    // them, so record what the FIRST send actually did — which pixel took it and
+    // Meta's verbatim reply — rather than trusting the success counter again.
+    let firstSend: Record<string, unknown> | null = null;
 
     const queue = [...rows];
     async function worker() {
@@ -121,6 +125,12 @@ export async function POST(request: Request) {
           },
         });
 
+        if (!firstSend) {
+          firstSend = res.ok
+            ? { ok: true, pixelTail: res.pixelTail, eventsReceived: res.eventsReceived, raw: res.raw }
+            : { ok: false, error: res.error };
+          console.log('[meta-backfill] first send →', JSON.stringify(firstSend));
+        }
         if (res.ok) {
           sent++;
           try {
@@ -152,6 +162,11 @@ export async function POST(request: Request) {
       skipped,
       dryRun,
       errors,
+      // Verbatim evidence from the first send. If `sent` is high but the dataset
+      // stays empty, this is what tells you whether Meta was even called and
+      // which pixel answered.
+      firstSend,
+      env: { vercelEnv: process.env.VERCEL_ENV ?? null, testCodeSet: !!process.env.META_TEST_EVENT_CODE },
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
