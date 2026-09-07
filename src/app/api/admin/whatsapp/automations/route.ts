@@ -15,7 +15,12 @@ async function requireAdmin(): Promise<boolean> {
   return (await verifyAdminSession(token)) !== null;
 }
 
-const TRIGGERS: WhatsAppTrigger[] = ['unverified', 'verified', 'noshow'];
+const TRIGGERS: WhatsAppTrigger[] = [
+  'unverified', 'verified', 'noshow',
+  // Clock-driven pre-webinar reminders. Their delayValue/delayUnit is ignored:
+  // the send time comes from the session start, not from the enqueue moment.
+  'reminder_t3d', 'reminder_t1d', 'reminder_t1h',
+];
 
 // GET /api/admin/whatsapp/automations — current config per trigger.
 export async function GET() {
@@ -41,7 +46,7 @@ export async function POST(req: NextRequest) {
 
   const trigger = body.trigger as WhatsAppTrigger;
   if (!TRIGGERS.includes(trigger)) {
-    return NextResponse.json({ error: 'trigger must be unverified, verified, or noshow.' }, { status: 400 });
+    return NextResponse.json({ error: `trigger must be one of: ${TRIGGERS.join(', ')}.` }, { status: 400 });
   }
 
   try {

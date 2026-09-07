@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse, after } from 'next/server';
 import crypto from 'crypto';
 import fs from 'fs';
-import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation, scheduleWhatsAppForRecipient, cancelPendingScheduledWhatsApp, getWebinarConfig } from '@/lib/db';
+import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation, scheduleWhatsAppForRecipient, cancelPendingScheduledWhatsApp, getWebinarConfig, scheduleWebinarReminders } from '@/lib/db';
 import { registerWebinarParticipant } from '@/lib/zoom';
 import { verifyOtpCode } from '@/lib/otpService';
 import { scoreAndSave, type ConversationTurn } from '@/lib/qualify';
@@ -221,6 +221,21 @@ export async function POST(req: NextRequest) {
       phone,
       recipientName: fullName,
     }).catch((err: unknown) => console.error('[wa auto-send] verified queue failed:', err));
+
+    // Pre-webinar WhatsApp reminders (T-3d / T-1d / T-1h). Reminders were
+    // email-only, and at a ~2% open rate almost no registrant ever saw one —
+    // WhatsApp is the channel they actually read, since it already carries the
+    // OTP. Send times are derived from the session start, so points already
+    // past are skipped rather than fired late; a late registrant just gets the
+    // reminders that are still ahead of them.
+    scheduleWebinarReminders({
+      registrationId: (typeof registrationId === 'string' ? registrationId : null),
+      phone,
+      recipientName: fullName,
+      sessionStartIso: config?.webinarDatetimeUtc ?? null,
+    })
+      .then((r) => console.log(`[wa reminders] ${phone}: scheduled=${r.scheduled} past=${r.skippedPast} noCampaign=${r.noCampaign}`))
+      .catch((err: unknown) => console.error('[wa reminders] queue failed:', err));
 
     // 6. Generate / echo back the event_id so the browser pixel and Stape
     // use the same id for CompleteRegistration deduplication.

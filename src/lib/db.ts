@@ -34,6 +34,10 @@ export interface Registration {
   attendanceDurationMin?: number | null;
   attendanceSyncedAt?: string | null;
   metaAttendedEventFired?: boolean | null;
+  // Answer to the MANDATORY "current status" select on the form (student /
+  // recent graduate / working professional). Distinct from `status`, which is
+  // the OTP state — see migration 0032.
+  currentStatus?: string | null;
   // Session the registration belongs to.
   sessionId?: string | null;
   // LLM lead qualification
@@ -423,6 +427,7 @@ type RegistrationRow = {
   chat_conversation?: Array<{ role: string; content: string }> | null;
   zoom_registered?: boolean | null;
   zoom_join_url?: string | null;
+  current_status?: string | null;
   fbc?: string | null;
   fbp?: string | null;
   fbclid?: string | null;
@@ -469,6 +474,7 @@ function mapRegistration(row: RegistrationRow): Registration {
     chatConversation: row.chat_conversation ?? null,
     zoomRegistered: row.zoom_registered ?? null,
     zoomJoinUrl: row.zoom_join_url ?? null,
+    currentStatus: row.current_status ?? null,
     fbc: row.fbc ?? null,
     fbp: row.fbp ?? null,
     fbclid: row.fbclid ?? null,
@@ -875,6 +881,7 @@ export async function addUnverifiedRegistration(
     email: reg.email,
     phone: reg.phone,
     status: 'Unverified',
+    current_status: reg.currentStatus ?? null,
     city: reg.city,
     created_at: new Date().toISOString(),
     whatsapp_status: reg.whatsappStatus ?? null,
@@ -3092,7 +3099,7 @@ export interface WhatsAppCampaign {
   // Auto-send (event-triggered automation). When enabled, this campaign acts as
   // the template/config for a trigger rather than a one-off bulk send.
   autoSendEnabled: boolean;
-  autoSendTrigger: 'unverified' | 'verified' | 'noshow' | null;
+  autoSendTrigger: WhatsAppTrigger | null;
   delayValue: number;
   delayUnit: 'minutes' | 'hours' | 'days';
 }
@@ -3132,7 +3139,7 @@ export async function createWhatsAppCampaign(params: {
   status?: WhatsAppCampaign['status'];
   scheduledFor?: string | null;
   autoSendEnabled?: boolean;
-  autoSendTrigger?: 'unverified' | 'verified' | 'noshow' | null;
+  autoSendTrigger?: WhatsAppTrigger | null;
   delayValue?: number;
   delayUnit?: 'minutes' | 'hours' | 'days';
 }): Promise<WhatsAppCampaign> {
@@ -3208,7 +3215,18 @@ export async function getWhatsAppCampaignById(id: string): Promise<WhatsAppCampa
 
 // ── WhatsApp auto-send (event-triggered automations) ───────────────────────
 
-export type WhatsAppTrigger = 'unverified' | 'verified' | 'noshow';
+export type WhatsAppTrigger =
+  | 'unverified' | 'verified' | 'noshow'
+  // Clock-driven reminders — fire at a fixed offset BEFORE the session starts,
+  // unlike the event-driven triggers above which fire N minutes after an event.
+  | 'reminder_t3d' | 'reminder_t1d' | 'reminder_t1h';
+
+// Offset before session start for each reminder trigger, in minutes.
+export const WHATSAPP_REMINDER_OFFSETS_MIN: Record<string, number> = {
+  reminder_t3d: 3 * 24 * 60,
+  reminder_t1d: 1 * 24 * 60,
+  reminder_t1h: 60,
+};
 
 // The active config campaign for a trigger (most recent enabled one).
 export async function getAutoSendWhatsAppCampaign(trigger: WhatsAppTrigger): Promise<WhatsAppCampaign | null> {
@@ -3227,12 +3245,13 @@ export async function getAutoSendWhatsAppCampaign(trigger: WhatsAppTrigger): Pro
 
 // Current automation config per trigger, for the admin UI.
 export async function listWhatsAppAutomations(): Promise<Record<WhatsAppTrigger, WhatsAppCampaign | null>> {
-  const [unverified, verified, noshow] = await Promise.all([
-    getAutoSendWhatsAppCampaign('unverified'),
-    getAutoSendWhatsAppCampaign('verified'),
-    getAutoSendWhatsAppCampaign('noshow'),
-  ]);
-  return { unverified, verified, noshow };
+  const triggers: WhatsAppTrigger[] = [
+    'unverified', 'verified', 'noshow',
+    'reminder_t3d', 'reminder_t1d', 'reminder_t1h',
+  ];
+  const found = await Promise.all(triggers.map(t => getAutoSendWhatsAppCampaign(t)));
+  return Object.fromEntries(triggers.map((t, i) => [t, found[i]])) as
+    Record<WhatsAppTrigger, WhatsAppCampaign | null>;
 }
 
 // Disable any existing config(s) for a trigger (called before saving a new one
@@ -3277,6 +3296,60 @@ export async function scheduleWhatsAppForRecipient(params: {
     });
   if (error) throw error;
   return true;
+}
+
+/**
+ * Enqueue the pre-webinar WhatsApp reminders for one registrant.
+ *
+ * Unlike scheduleWhatsAppForRecipient, the send time comes from the WEBINAR,
+ * not from now + campaign delay: each reminder lands at a fixed offset before
+ * `sessionStartIso`. Points already in the past are skipped rather than fired
+ * late — someone who registers two hours before the session should get the
+ * T-1h reminder and nothing else, not a burst of three stale ones.
+ *
+ * Safe to call more than once: a unique index on (registration_id, trigger)
+ * for reminder_* means a repeat verification cannot double-send.
+ */
+export async function scheduleWebinarReminders(params: {
+  registrationId: string | null;
+  phone: string;
+  recipientName: string;
+  sessionStartIso: string | null;
+}): Promise<{ scheduled: number; skippedPast: number; noCampaign: number }> {
+  const out = { scheduled: 0, skippedPast: 0, noCampaign: 0 };
+  const phone = params.phone?.trim();
+  if (!phone || !params.sessionStartIso) return out;
+
+  const startMs = Date.parse(params.sessionStartIso);
+  if (!Number.isFinite(startMs)) return out;
+
+  for (const [trigger, offsetMin] of Object.entries(WHATSAPP_REMINDER_OFFSETS_MIN)) {
+    const sendAtMs = startMs - offsetMin * 60_000;
+    if (sendAtMs <= Date.now()) { out.skippedPast++; continue; }
+
+    const campaign = await getAutoSendWhatsAppCampaign(trigger as WhatsAppTrigger);
+    if (!campaign) { out.noCampaign++; continue; }
+
+    const { error } = await client()
+      .schema('excel_to_ai')
+      .from('whatsapp_scheduled_sends')
+      .insert({
+        campaign_id:     campaign.id,
+        registration_id: params.registrationId,
+        phone,
+        recipient_name:  params.recipientName ?? '',
+        trigger,
+        send_after:      new Date(sendAtMs).toISOString(),
+        status:          'pending',
+      });
+    // 23505 = unique violation: this reminder is already queued for them.
+    if (error && (error as { code?: string }).code !== '23505') {
+      console.error(`[db.scheduleWebinarReminders] ${trigger} failed:`, error);
+      continue;
+    }
+    if (!error) out.scheduled++;
+  }
+  return out;
 }
 
 export interface ScheduledWhatsAppSend {
