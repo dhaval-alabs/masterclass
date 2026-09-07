@@ -183,6 +183,30 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
     userData: { phone?: string; firstName?: string; lastName?: string; city?: string; fbp?: string; fbc?: string } = {},
   ) => {
     if (typeof window === 'undefined') return;
+
+    // Persist this person's identity for Manual Advanced Matching so EVERY later
+    // PageView carries em/ph/fn/ln/ct instead of being anonymous (layout.tsx
+    // replays it into fbq('init')). Written before the once-per-session gate
+    // below: the gate stops duplicate CONVERSION events, but the identity should
+    // still be refreshed on a repeat submit. Raw + normalised — the pixel hashes.
+    try {
+      const digits = (userData.phone || '').replace(/\D/g, '');
+      const am: Record<string, string> = {};
+      const em = email.trim().toLowerCase();
+      if (em) am.em = em;
+      // Meta wants digits WITH country code and no '+'. Ours are 10-digit Indian.
+      if (digits) am.ph = digits.length === 10 ? `91${digits}` : digits;
+      if (userData.firstName) am.fn = userData.firstName.trim().toLowerCase();
+      if (userData.lastName) am.ln = userData.lastName.trim().toLowerCase();
+      if (userData.city) am.ct = userData.city.trim().toLowerCase().replace(/\s+/g, '');
+      am.country = 'in';
+      window.localStorage.setItem('al_mc_am', JSON.stringify(am));
+      // Apply immediately too, so events later in THIS pageview are matched
+      // rather than having to wait for the next load.
+      const pixelId = process.env.NEXT_PUBLIC_META_PIXEL_ID;
+      if (pixelId && typeof window.fbq === 'function') window.fbq('init', pixelId, am);
+    } catch { /* private mode — advanced matching is best-effort */ }
+
     const key = `lp_pixel_fired_${eventName}_${email.toLowerCase()}`;
     try {
       if (window.sessionStorage.getItem(key)) return; // already fired this session
