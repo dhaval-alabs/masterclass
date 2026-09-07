@@ -52,7 +52,7 @@ export type MetaCapiEvent = {
 };
 
 type CapiResult =
-  | { ok: true; eventsReceived: number }
+  | { ok: true; eventsReceived: number; raw?: string; pixelTail?: string }
   | { ok: false; error: string };
 
 export async function sendMetaCapiEvent(event: MetaCapiEvent): Promise<CapiResult> {
@@ -174,7 +174,11 @@ export async function sendMetaCapiEvent(event: MetaCapiEvent): Promise<CapiResul
       console.warn(`[Meta CAPI] ${event.eventName} returned warnings:`, JSON.stringify(data.messages).slice(0, 300));
     }
 
-    return { ok: true, eventsReceived: received ?? 1 };
+    // Surface the raw reply + which pixel took it. `events_received` alone is
+    // NOT evidence the event landed — a test-mode send returns a byte-identical
+    // {"events_received":1,"messages":[]}, so callers that need certainty have
+    // to be able to see what Meta actually said and where it went.
+    return { ok: true, eventsReceived: received ?? 1, raw: raw.slice(0, 300), pixelTail: pixelId.slice(-4) };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

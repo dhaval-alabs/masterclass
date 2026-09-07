@@ -422,9 +422,17 @@ export default function AdminPortal() {
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
       const failedNote = body.failed ? ` · ${body.failed} FAILED (${(body.errors || []).join(' | ')})` : '';
+      // Show what Meta actually replied to the first send. A run once reported
+      // 399/399 sent while the dataset received nothing, so the counter alone is
+      // not trustworthy — this makes the real outcome visible without devtools.
+      const fs = body.firstSend;
+      const diag = fs
+        ? ` — first send: ${fs.ok ? `pixel …${fs.pixelTail}, Meta said ${fs.raw}` : `FAILED ${fs.error}`}`
+        : '';
+      const envNote = body.env?.testCodeSet ? ' ⚠ META_TEST_EVENT_CODE is set in this environment' : '';
       setAttendanceSyncMessage({
         kind: body.failed ? 'err' : 'ok',
-        text: `Meta backfill (${body.scope}): ${body.sent}/${body.total} sent as ${body.eventName}${failedNote}`,
+        text: `Meta backfill (${body.scope}): ${body.sent}/${body.total} sent as ${body.eventName}${failedNote}${diag}${envNote}`,
       });
       loadRegistrations(regPage, regPageSize);
     } catch (err) {
