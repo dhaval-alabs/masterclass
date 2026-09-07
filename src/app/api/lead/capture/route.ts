@@ -105,6 +105,49 @@ async function pushToGoogleSheets(body: any, cleanPhone: string) {
   }
 }
 
+// ── "Current status" → LeadSquared ───────────────────────────────────────────
+// The form's mandatory status select was posted as body.status and then dropped
+// on the floor: nothing read it, so sales could not segment by it at all.
+//
+// No single existing LSQ dropdown holds all three answers, and adding an option
+// needs an LSQ admin. Two searchable dropdowns that already exist do cover it
+// between them, which makes each answer uniquely filterable TODAY with only
+// values LSQ already accepts:
+//
+//   Student                       → describe = Student              , experience = Student
+//   Recent graduate (under 1 yr)  → describe = Student              , experience = Less than 1 Year
+//   Working professional (1+ yrs) → describe = Working Professional  , experience left untouched
+//
+// "1+ yrs" is deliberately left off mx_Work_Experience: its bands are 1-3 / 3-5
+// / 5-10 / >10, so writing any of them would assert a seniority the form never
+// asked for. describe=Working Professional is the honest, filterable answer.
+//
+// Matched on keywords, not exact strings, so an admin editing the option labels
+// in Settings cannot silently break the mapping.
+const LSQ_DESCRIBE_FIELD = process.env.LSQ_DESCRIBE_FIELD || 'mx_How_would_you_describe_yourself';
+const LSQ_EXPERIENCE_FIELD = process.env.LSQ_EXPERIENCE_FIELD || 'mx_Work_Experience';
+
+function mapCurrentStatusToLsq(raw: unknown): Array<[string, string]> {
+  const v = (typeof raw === 'string' ? raw : '').trim().toLowerCase();
+  if (!v) return [];
+  const isGraduate = /graduat|under\s*1|less\s*than\s*1|fresher/.test(v);
+  const isStudent = /student/.test(v);
+  const isPro = /professional|working|experien/.test(v);
+
+  // Order matters: "Final-year student / Recent graduate" contains BOTH words,
+  // and the recent-graduate reading is the more specific one.
+  if (isGraduate) {
+    return [[LSQ_DESCRIBE_FIELD, 'Student'], [LSQ_EXPERIENCE_FIELD, 'Less than 1 Year']];
+  }
+  if (isStudent) {
+    return [[LSQ_DESCRIBE_FIELD, 'Student'], [LSQ_EXPERIENCE_FIELD, 'Student']];
+  }
+  if (isPro) {
+    return [[LSQ_DESCRIBE_FIELD, 'Working Professional']];
+  }
+  return []; // unrecognised label — send nothing rather than mis-tag the lead
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -150,6 +193,8 @@ export async function POST(req: NextRequest) {
         city,
         whatsappStatus: 'pending',
         whatsappError: null,
+        // Mandatory form field — previously validated then discarded.
+        currentStatus: typeof body.status === 'string' ? body.status : null,
         sessionId: config.activeSessionId,
         // Meta click identifiers — persisted so the server-side WebinarAttended
         // CAPI event can reuse them and so we can forward mx_FBCLID to LSQ.
@@ -193,6 +238,9 @@ export async function POST(req: NextRequest) {
     ].filter((line): line is string => line !== null);
     const notesFieldName = process.env.LSQ_NOTES_FIELD_NAME || 'mx_Notes';
 
+    // Mandatory "current status" → filterable LSQ dropdowns (see mapping above).
+    const currentStatusWrites = mapCurrentStatusToLsq(body.status);
+
     const lsqPayload = [
       { Attribute: 'FirstName',    Value: firstName },
       { Attribute: 'LastName',     Value: lastName },
@@ -219,6 +267,11 @@ export async function POST(req: NextRequest) {
     const fbclidValue = body.fbc || body.fbclid || '';
     // GCLID schema name is `mx_gclid` (verified against LSQ metadata) — the old
     // `mx_GCLID` did not match a real schema name and was silently dropped.
+    // Mandatory "current status" — the whole point is that sales can filter on
+    // it, so it goes to searchable dropdown fields, not into the notes blob.
+    for (const [attr, val] of currentStatusWrites) {
+      lsqPayload.push({ Attribute: attr, Value: val });
+    }
     if (gclidValue)  lsqPayload.push({ Attribute: process.env.LSQ_GCLID_FIELD || 'mx_gclid', Value: gclidValue });
     if (fbclidValue) lsqPayload.push({ Attribute: process.env.LSQ_FBCLID_FIELD || 'mx_FBCLID', Value: fbclidValue });
 
