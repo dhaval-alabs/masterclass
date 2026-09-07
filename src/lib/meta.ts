@@ -123,8 +123,21 @@ export async function sendMetaCapiEvent(event: MetaCapiEvent): Promise<CapiResul
       ],
     };
 
+    // test_event_code routes events to the Test Events tab ONLY: Meta still
+    // answers HTTP 200 with events_received, but the events are never counted
+    // in the dataset, never attributed, and never usable for audiences. Left
+    // set in production it silently discards every server event, so honour it
+    // outside production only.
     const testCode = process.env.META_TEST_EVENT_CODE;
-    if (testCode) payload.test_event_code = testCode;
+    if (testCode) {
+      if (process.env.VERCEL_ENV === 'production' || process.env.NODE_ENV === 'production') {
+        console.warn(
+          `[Meta CAPI] Ignoring META_TEST_EVENT_CODE=${testCode} in production — it would route ${event.eventName} to Test Events and drop it from the dataset.`,
+        );
+      } else {
+        payload.test_event_code = testCode;
+      }
+    }
 
     const res = await fetch(`https://graph.facebook.com/v19.0/${pixelId}/events?access_token=${encodeURIComponent(accessToken)}`, {
       method: 'POST',
@@ -132,13 +145,36 @@ export async function sendMetaCapiEvent(event: MetaCapiEvent): Promise<CapiResul
       body: JSON.stringify(payload),
     });
 
+    const raw = await res.text().catch(() => '');
+
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      return { ok: false, error: `Meta CAPI ${res.status} for ${event.eventName} (event_id=${eventId.slice(0, 12)}…): ${body.slice(0, 300)}` };
+      return { ok: false, error: `Meta CAPI ${res.status} for ${event.eventName} (event_id=${eventId.slice(0, 12)}…): ${raw.slice(0, 300)}` };
     }
 
-    const data = await res.json().catch(() => ({}));
-    return { ok: true, eventsReceived: typeof data.events_received === 'number' ? data.events_received : 1 };
+    let data: { events_received?: number; messages?: unknown[] } = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      // Non-JSON 200 — fall through with the default and report what came back.
+    }
+
+    // A 200 does NOT mean the event landed. When a custom event name is blocked
+    // or still awaiting confirmation in Events Manager, Meta accepts the request
+    // and replies events_received: 0 — the event is dropped. Reporting that as
+    // success is what let WebinarAttended look "fired" in our audit log while
+    // Meta counted nothing, so treat it as the failure it is.
+    const received = typeof data.events_received === 'number' ? data.events_received : null;
+    if (received === 0) {
+      return {
+        ok: false,
+        error: `Meta CAPI accepted but DROPPED ${event.eventName} (events_received=0) — the event name is blocked or awaiting confirmation in Events Manager. Response: ${raw.slice(0, 200)}`,
+      };
+    }
+    if (Array.isArray(data.messages) && data.messages.length) {
+      console.warn(`[Meta CAPI] ${event.eventName} returned warnings:`, JSON.stringify(data.messages).slice(0, 300));
+    }
+
+    return { ok: true, eventsReceived: received ?? 1 };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
