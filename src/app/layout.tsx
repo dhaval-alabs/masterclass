@@ -107,7 +107,51 @@ export default function RootLayout({
                 t.src=v;s=b.getElementsByTagName(e)[0];
                 s.parentNode.insertBefore(t,s)}(window, document,'script',
                 'https://connect.facebook.net/en_US/fbevents.js');
-                fbq('init', '${META_PIXEL_ID}');
+                // ── Click ID recovery ────────────────────────────────────
+                // Meta only writes _fbc when it sees ?fbclid, and only on that
+                // exact landing. Ad clicks that bounce through a redirect, land
+                // with the pixel slow to boot, or return in a later session lose
+                // it — which is why click id (fbc) sits at ~20% coverage. Rebuild
+                // a spec-valid envelope from the fbclid we persist, BEFORE init,
+                // so PageView itself carries it. Version digit tracks the click-id
+                // FORMAT: encrypted 'PA…' ids are v2, classic fbclids are v1 —
+                // stamping a PA id as v1 makes Meta discard it.
+                (function(){
+                  try {
+                    var q = new URLSearchParams(window.location.search);
+                    var fbclid = q.get('fbclid') || localStorage.getItem('fbclid');
+                    if (!fbclid) return;
+                    try {
+                      localStorage.setItem('fbclid', fbclid);
+                      if (!localStorage.getItem('fbclid_ts')) localStorage.setItem('fbclid_ts', String(Date.now()));
+                    } catch (e) {}
+                    if (document.cookie.indexOf('_fbc=') !== -1) return; // Meta already set it
+                    if (fbclid.indexOf('fb.') === 0) return;             // already an envelope
+                    var ts = Number(localStorage.getItem('fbclid_ts')) || Date.now();
+                    var ver = fbclid.indexOf('PA') === 0 ? '2' : '1';
+                    document.cookie = '_fbc=fb.' + ver + '.' + ts + '.' + fbclid + ';max-age=7776000;path=/;SameSite=Lax';
+                  } catch (e) {}
+                })();
+
+                // ── Manual Advanced Matching ─────────────────────────────────
+                // PageView fires before anyone identifies themselves, so on its
+                // own it carries no email/phone/name/city — that is why those sit
+                // at 11-38% coverage and cap event match quality. Once someone has
+                // registered we know exactly who they are, so replay that identity
+                // into init(): every later PageView (reload, return visit, another
+                // page) is then matched. Values go in RAW and normalised — the
+                // pixel hashes them itself; pre-hashing here would double-hash.
+                var __am = {};
+                try {
+                  var __raw = localStorage.getItem('al_mc_am');
+                  if (__raw) {
+                    var __d = JSON.parse(__raw);
+                    ['em','ph','fn','ln','ct','country'].forEach(function(k){
+                      if (__d && typeof __d[k] === 'string' && __d[k]) __am[k] = __d[k];
+                    });
+                  }
+                } catch (e) {}
+                fbq('init', '${META_PIXEL_ID}', __am);
                 fbq('track', 'PageView');
               `,
             }}
