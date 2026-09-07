@@ -356,9 +356,22 @@ export default function AdminPortal() {
 
   const handleSyncAttendance = async (force = false) => {
     if (isSyncingAttendance) return;
+    // Both of these read a LIVE Zoom report, which is per-webinar — so they need
+    // exactly one cohort. Previously this posted only { force } and ignored the
+    // cohort dropdown entirely, so with no ACTIVE session (every session ends as
+    // 'completed') the server had nothing to resolve and always answered
+    // "No webinar session to sync" no matter which cohort was selected.
+    const scopedSessionId = regSessionSel && regSessionSel !== 'all' ? regSessionSel : '';
+    if (!scopedSessionId) {
+      setAttendanceSyncMessage({
+        kind: 'err',
+        text: 'Pick a single cohort first — a Zoom report belongs to one webinar, so this cannot run across all sessions. To push attendance for every cohort to Meta, use "Backfill Meta attendance" instead (it reads our database, not Zoom).',
+      });
+      return;
+    }
     const msg = force
-      ? 'RE-FIRE all attendees to Meta, including ones already marked as fired? Use this to recover events Meta accepted but held/blocked. Safe — deduped by event_id.'
-      : 'Pull attendance from Zoom and fire Meta + LSQ updates? This is safe to re-run — Meta is deduped by event_id.';
+      ? 'RE-FIRE this cohort\'s attendees to Meta, including ones already marked as fired? Safe — deduped by event_id. Note: this still needs a live Zoom report, so it fails for older webinars Zoom no longer returns; use "Backfill Meta attendance" for those.'
+      : 'Pull attendance from Zoom for this cohort and fire Meta + LSQ updates? This is safe to re-run — Meta is deduped by event_id.';
     if (!confirm(msg)) return;
     setIsSyncingAttendance(true);
     setAttendanceSyncMessage(null);
@@ -366,7 +379,7 @@ export default function AdminPortal() {
       const res = await fetch('/api/admin/zoom/sync-attendance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ force }),
+        body: JSON.stringify({ force, sessionId: scopedSessionId }),
       });
       const body = await res.json();
       if (!res.ok || !body.success) {
