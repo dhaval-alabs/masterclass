@@ -93,7 +93,9 @@ export async function POST(request: Request) {
       : await getActiveWebinarSession();
 
     if (!targetSession) {
-      const err = 'No webinar session to sync. Activate a session or pass a sessionId.';
+      // Every session ends as 'completed', so there is usually NO active session
+      // and "activate one" is the wrong advice — say what actually works.
+      const err = 'No webinar session to sync. Select a single cohort in the Cohort dropdown (a Zoom report belongs to one webinar), or activate a session. To push attendance for every cohort to Meta, use the "Backfill Meta attendance" button, which reads our database instead of Zoom.';
       await recordAttendanceSyncRun({
         ranAt: startedAt,
         ranBy: session.sub,
