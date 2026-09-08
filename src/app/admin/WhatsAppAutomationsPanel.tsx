@@ -3,7 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { Loader2, Zap, Check } from "lucide-react";
 
-type Trigger = "unverified" | "verified" | "noshow";
+type Trigger =
+  | "unverified" | "verified" | "noshow"
+  | "reminder_t3d" | "reminder_t1d" | "reminder_t1h";
 
 interface AutomationCampaign {
   templateName: string;
@@ -29,16 +31,40 @@ const META: Record<Trigger, { title: string; desc: string; showDelay: boolean }>
   unverified: { title: "Didn't verify OTP → nudge", desc: "Sent to people who filled the form but didn't complete OTP. Auto-skipped if they verify before it fires.", showDelay: true },
   verified:   { title: "Verified → welcome", desc: "Sent right after someone completes OTP (use 0 minutes for immediate).", showDelay: true },
   noshow:     { title: "No-show → follow-up", desc: "Sent to registrants who didn't attend — fires when you run “Sync Attendance from Zoom”.", showDelay: true },
+  // Clock-driven: the send time comes from the session's start, so there is no
+  // delay to configure. Showing a delay box here would imply otherwise.
+  reminder_t3d: { title: "Reminder · 3 days before", desc: "Sent 3 days before the session starts. Timing comes from the session — no delay to set.", showDelay: false },
+  reminder_t1d: { title: "Reminder · 1 day before",  desc: "Sent 1 day before the session starts. Timing comes from the session — no delay to set.",  showDelay: false },
+  reminder_t1h: { title: "Reminder · 1 hour before", desc: "Sent 1 hour before the session starts. Timing comes from the session — no delay to set.", showDelay: false },
 };
 
-const ORDER: Trigger[] = ["unverified", "verified", "noshow"];
+const ORDER: Trigger[] = ["unverified", "verified", "reminder_t3d", "reminder_t1d", "reminder_t1h", "noshow"];
 
 function blankForm(): FormState {
   return { enabled: false, templateName: "", languageCode: "en_US", variables: "{name}", delayValue: 15, delayUnit: "minutes", saving: false, saved: false };
 }
 
 export default function WhatsAppAutomationsPanel() {
-  const [forms, setForms] = useState<Record<Trigger, FormState>>({ unverified: blankForm(), verified: blankForm(), noshow: blankForm() });
+  const [forms, setForms] = useState<Record<Trigger, FormState>>(
+    () => Object.fromEntries(ORDER.map(t => [t, blankForm()])) as Record<Trigger, FormState>,
+  );
+  // Approved templates, so the name can be PICKED rather than typed. A typo in a
+  // free-text field is invisible until send time, when Meta rejects the unknown
+  // template and the automation silently does nothing.
+  const [templates, setTemplates] = useState<{ name: string; language: string }[] | null>(null);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+  useEffect(() => {
+    fetch("/api/admin/whatsapp/templates")
+      .then(async r => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error ?? `HTTP ${r.status}`);
+        const approved = (d.templates ?? [])
+          .filter((t: { status?: string }) => (t.status ?? "").toUpperCase() === "APPROVED")
+          .map((t: { name: string; language: string }) => ({ name: t.name, language: t.language }));
+        setTemplates(approved);
+      })
+      .catch(e => setTemplatesError(e instanceof Error ? e.message : String(e)));
+  }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -135,9 +161,37 @@ export default function WhatsAppAutomationsPanel() {
                 {f.enabled && (
                   <div className="mt-3 space-y-2">
                     <div className="grid grid-cols-[1fr_7rem] gap-2">
-                      <input className={input} placeholder="Approved template name (e.g. webinar_reminder)" value={f.templateName} onChange={e => patch(t, { templateName: e.target.value })} />
-                      <input className={input} placeholder="en_US" value={f.languageCode} onChange={e => patch(t, { languageCode: e.target.value })} />
+                      {templates && templates.length > 0 ? (
+                        <select
+                          className={input}
+                          value={f.templateName}
+                          onChange={e => {
+                            const picked = templates.find(x => x.name === e.target.value);
+                            // Language belongs to the template, so set it from the
+                            // pick instead of leaving a stale code behind.
+                            patch(t, { templateName: e.target.value, languageCode: picked?.language ?? f.languageCode });
+                          }}
+                        >
+                          <option value="">Select an approved template…</option>
+                          {templates.map(x => (
+                            <option key={`${x.name}:${x.language}`} value={x.name}>{x.name} ({x.language})</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input className={input} placeholder="Approved template name (e.g. webinar_reminder)" value={f.templateName} onChange={e => patch(t, { templateName: e.target.value })} />
+                      )}
+                      <input className={input} placeholder="en_US" value={f.languageCode} onChange={e => patch(t, { languageCode: e.target.value })} readOnly={!!(templates && templates.length > 0)} />
                     </div>
+                    {templatesError && (
+                      <p className="text-[11px] text-amber-700">
+                        Couldn&apos;t load your approved templates ({templatesError}) — type the name exactly as it appears in Meta, or it will fail silently at send time.
+                      </p>
+                    )}
+                    {templates && templates.length === 0 && (
+                      <p className="text-[11px] text-amber-700">
+                        No APPROVED templates on this WhatsApp account yet. Get one approved in Meta Business Manager first.
+                      </p>
+                    )}
                     <textarea className={`${input} w-full font-mono`} rows={2} placeholder={"Variables, one per line\n{name}"} value={f.variables} onChange={e => patch(t, { variables: e.target.value })} />
                     {meta.showDelay && (
                       <div className="flex items-center gap-2 text-sm text-slate-600">
