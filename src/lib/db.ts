@@ -2556,7 +2556,7 @@ export interface EmailCampaign {
   bodyHtml: string | null;
   bannerUrl: string | null;
   audience: 'verified' | 'unverified' | 'all';
-  status: 'draft' | 'sending' | 'sent' | 'partial' | 'failed';
+  status: 'draft' | 'scheduled' | 'sending' | 'sent' | 'partial' | 'failed';
   totalRecipients: number;
   sentCount: number;
   failedCount: number;
@@ -2570,6 +2570,9 @@ export interface EmailCampaign {
   errorSummary: string | null;
   createdAt: string;
   sentAt: string | null;
+  // Set when this is a one-off scheduled broadcast (migration 0034). The cron
+  // fires it once scheduled_for passes; null for drafts and auto-sends.
+  scheduledFor: string | null;
 }
 
 export interface QueueItem {
@@ -2606,6 +2609,7 @@ function mapEmailCampaign(r: Record<string, unknown>): EmailCampaign {
     bodyHtml: (r.body_html as string | null) ?? null,
     bannerUrl: (r.banner_url as string | null) ?? null,
     audience: r.audience as EmailCampaign['audience'],
+    scheduledFor: (r.scheduled_for as string | null) ?? null,
     status: r.status as EmailCampaign['status'],
     totalRecipients: (r.total_recipients as number) ?? 0,
     sentCount: (r.sent_count as number) ?? 0,
@@ -2708,7 +2712,7 @@ export async function createEmailCampaign(params: {
 
 export async function updateEmailCampaign(
   id: string,
-  updates: Partial<Pick<EmailCampaign, 'status' | 'sentCount' | 'failedCount' | 'errorSummary' | 'sentAt' | 'totalRecipients'>>,
+  updates: Partial<Pick<EmailCampaign, 'status' | 'sentCount' | 'failedCount' | 'errorSummary' | 'sentAt' | 'totalRecipients' | 'scheduledFor'>>,
 ): Promise<void> {
   const row: Record<string, unknown> = {};
   if (updates.status           !== undefined) row.status            = updates.status;
@@ -2717,12 +2721,56 @@ export async function updateEmailCampaign(
   if (updates.errorSummary     !== undefined) row.error_summary     = updates.errorSummary;
   if (updates.sentAt           !== undefined) row.sent_at           = updates.sentAt;
   if (updates.totalRecipients  !== undefined) row.total_recipients  = updates.totalRecipients;
+  if (updates.scheduledFor     !== undefined) row.scheduled_for     = updates.scheduledFor;
   const { error } = await client()
     .schema('excel_to_ai')
     .from('email_campaigns')
     .update(row)
     .eq('id', id);
   if (error) throw error;
+}
+
+export type EmailAutoSendAudience = 'verified' | 'unverified' | 'all';
+
+// Current email auto-send config per audience, for the automation health check.
+// Mirrors listWhatsAppAutomations. Email keys on auto_send_audience rather than
+// a separate trigger column — 'unverified' IS the "didn't finish OTP" nudge.
+export async function listEmailAutomations(): Promise<Record<EmailAutoSendAudience, EmailCampaign | null>> {
+  const audiences: EmailAutoSendAudience[] = ['unverified', 'verified', 'all'];
+  const found = await Promise.all(
+    audiences.map(async (a) => {
+      const { data, error } = await client()
+        .schema('excel_to_ai')
+        .from('email_campaigns')
+        .select('*')
+        .eq('auto_send_enabled', true)
+        .eq('auto_send_audience', a)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error || !data) return null;
+      return mapEmailCampaign(data as Record<string, unknown>);
+    }),
+  );
+  return Object.fromEntries(audiences.map((a, i) => [a, found[i]])) as
+    Record<EmailAutoSendAudience, EmailCampaign | null>;
+}
+
+/**
+ * Scheduled email broadcasts whose time has passed, for the cron to fire.
+ * Mirrors getDueScheduledWhatsAppCampaigns.
+ */
+export async function getDueScheduledEmailCampaigns(limit = 25): Promise<EmailCampaign[]> {
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('email_campaigns')
+    .select('*')
+    .eq('status', 'scheduled')
+    .lte('scheduled_for', new Date().toISOString())
+    .order('scheduled_for', { ascending: true })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []).map((r) => mapEmailCampaign(r as Record<string, unknown>));
 }
 
 export async function listEmailCampaigns(sessionId?: string | null): Promise<EmailCampaign[]> {

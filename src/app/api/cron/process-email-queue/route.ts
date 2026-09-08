@@ -10,7 +10,12 @@ import {
   getEmailSettings,
   type EmailSettings,
 } from '@/lib/db';
+import { getDueScheduledEmailCampaigns } from '@/lib/db';
 import { buildEmailHtml } from '@/lib/email';
+import { fireEmailCampaign } from '@/lib/email-campaign';
+
+// A scheduled broadcast dispatches its whole audience in one run.
+export const maxDuration = 300;
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM = process.env.RESEND_FROM_EMAIL ?? 'onboarding@resend.dev';
@@ -25,9 +30,28 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // 1. Fire any one-off SCHEDULED broadcast whose time has passed (migration
+    //    0034). Runs before the per-recipient drain below so a campaign
+    //    scheduled for this minute goes out in this same tick.
+    let scheduledFired = 0;
+    try {
+      for (const campaign of await getDueScheduledEmailCampaigns(25)) {
+        try {
+          const r = await fireEmailCampaign(campaign);
+          scheduledFired++;
+          console.log(`[cron] email broadcast ${campaign.id} → ${r.status} (${r.sentCount}/${r.totalRecipients})`);
+        } catch (err) {
+          console.error(`[cron] email scheduled fire ${campaign.id} failed:`, err);
+        }
+      }
+    } catch (err) {
+      console.error('[cron] due scheduled email lookup failed:', err);
+    }
+
+    // 2. Drain the per-recipient queue used by trigger-based auto-sends.
     const items = await getDueScheduledEmails(200);
     if (items.length === 0) {
-      return NextResponse.json({ processed: 0, sent: 0, failed: 0 });
+      return NextResponse.json({ scheduledFired, processed: 0, sent: 0, failed: 0 });
     }
 
     // Fetch branding settings once for all emails in this run.
@@ -129,7 +153,7 @@ export async function POST(req: NextRequest) {
       totalFailed += campaignFailed;
     }
 
-    return NextResponse.json({ processed: items.length, sent: totalSent, failed: totalFailed });
+    return NextResponse.json({ scheduledFired, processed: items.length, sent: totalSent, failed: totalFailed });
   } catch (err) {
     console.error('[cron] process-email-queue error:', err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
