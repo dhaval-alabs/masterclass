@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, LogOut, UploadCloud, Plus, Trash2, ArrowUp, ArrowDown, Settings, Video, Star, ListOrdered, HelpCircle, Layers, Users, UserCog, Mail, MessageSquare, BarChart3, Send, Mic } from "lucide-react";
+import { Loader2, LogOut, UploadCloud, Plus, Trash2, ArrowUp, ArrowDown, Settings, Video, Star, ListOrdered, HelpCircle, Layers, Users, UserCog, Mail, MessageSquare, BarChart3, Send, Mic, AlertTriangle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import TeamTab from "./TeamTab";
@@ -351,6 +351,20 @@ export default function AdminPortal() {
       setIsApplyingDedupe(false);
     }
   };
+
+  // Automation health. Every WhatsApp and email automation was found disabled —
+  // the crons were running with nothing configured to send, and the UI's empty
+  // rows read the same as "not set up yet". Surfaced on every tab so silence
+  // can't be mistaken for health again.
+  const [autoHealth, setAutoHealth] = useState<{
+    ok: boolean; missingCount: number; missing: string[]; warnings: string[];
+  } | null>(null);
+  useEffect(() => {
+    fetch('/api/admin/automations/health')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && !d.error) setAutoHealth(d); })
+      .catch(() => { /* non-critical panel */ });
+  }, []);
 
   const [isBackfillingMeta, setIsBackfillingMeta] = useState(false);
 
@@ -828,6 +842,27 @@ export default function AdminPortal() {
       {/* Main content */}
       <main className="flex-1 bg-slate-50 min-h-screen overflow-y-auto">
         <div className="p-8">
+
+          {autoHealth && !autoHealth.ok && (
+            <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                <div className="text-xs text-amber-900 space-y-1">
+                  <p className="font-semibold">
+                    {autoHealth.missingCount} automation{autoHealth.missingCount === 1 ? '' : 's'} not configured —
+                    nothing is being sent for {autoHealth.missingCount === 1 ? 'it' : 'them'}.
+                  </p>
+                  {autoHealth.warnings.map((w) => <p key={w}>{w}</p>)}
+                  <p className="text-amber-800">
+                    Missing: {autoHealth.missing.join(' · ')}
+                  </p>
+                  <p className="text-amber-800">
+                    Set these up in the WhatsApp and Emails tabs. Reminder timing comes from the session, so their delay fields are ignored.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
           
           {/* Settings Tab */}
           {activeTab === "settings" && (
