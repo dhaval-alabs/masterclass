@@ -12,6 +12,7 @@ import {
   getWhatsAppDailySentCount,
   getDueScheduledWhatsAppSends,
   markScheduledWhatsAppSend,
+  getAutoSendWhatsAppCampaign,
   isRegistrationVerified,
   type WhatsAppCampaign,
   type ScheduledWhatsAppSend,
@@ -279,7 +280,13 @@ export async function drainWhatsAppAutoSends(maxItems = 150): Promise<{ sent: nu
   }
 
   for (const [campaignId, group] of byCampaign) {
-    const campaign = await getWhatsAppCampaignById(campaignId);
+    // A row records the config that was live when it was scheduled. Editing the
+    // automation writes a NEW config, leaving these rows pointing at a retired
+    // one — which, if that old config was the broken version, holds them pending
+    // forever. The admin's CURRENT config for the trigger is the real intent, so
+    // prefer it and fall back to the recorded row.
+    const stored = await getWhatsAppCampaignById(campaignId);
+    const campaign = (await getAutoSendWhatsAppCampaign(group[0].trigger)) ?? stored;
     if (!campaign) {
       for (const d of group) { await markScheduledWhatsAppSend(d.id, 'failed', 'Auto-send config not found'); failed++; }
       continue;
