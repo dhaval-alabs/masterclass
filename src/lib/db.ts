@@ -3339,6 +3339,21 @@ export async function listWhatsAppAutomations(): Promise<Record<WhatsAppTrigger,
  * edits left five near-identical rows behind. A config row that HAS sent is
  * left alone — it is a real send record, and rewriting it would rewrite history.
  */
+/**
+ * The audience a trigger's people actually belong to. An automation never reads
+ * this — it sends per-recipient to whoever the trigger scheduled — but the row
+ * lives in the campaigns table, where `audience` IS read by a manual send. It
+ * used to be hard-coded 'all', which turned one stray click on the OTP-nudge
+ * config into a broadcast of "verify your OTP" to every registrant, verified or
+ * not. Storing the honest audience makes that misfire harmless.
+ */
+function audienceForTrigger(trigger: WhatsAppTrigger): 'verified' | 'unverified' | 'all' {
+  if (trigger === 'unverified') return 'unverified';
+  // Welcome, reminders and no-show follow-ups all address people who completed
+  // registration.
+  return 'verified';
+}
+
 export async function upsertWhatsAppAutomation(params: {
   trigger: WhatsAppTrigger;
   sessionId: string | null;
@@ -3371,6 +3386,7 @@ export async function upsertWhatsAppAutomation(params: {
     session_id:        params.sessionId,
     template_name:     params.templateName,
     language_code:     params.languageCode,
+    audience:          audienceForTrigger(params.trigger),
     variables:         params.variables,
     header_image_url:  params.headerImageUrl,
     auto_send_enabled: true,
@@ -3395,7 +3411,7 @@ export async function upsertWhatsAppAutomation(params: {
     sessionId: params.sessionId,
     templateName: params.templateName,
     languageCode: params.languageCode,
-    audience: 'all',
+    audience: audienceForTrigger(params.trigger),
     variables: params.variables,
     headerImageUrl: params.headerImageUrl,
     totalRecipients: 0,
