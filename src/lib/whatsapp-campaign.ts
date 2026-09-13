@@ -17,6 +17,7 @@ import {
   type ScheduledWhatsAppSend,
 } from './db';
 import { sendWhatsAppCampaign, getBroadcastCreds } from './whatsapp';
+import { findTemplateSendProblem } from './wa-template-spec';
 
 // How many recipients we attempt per chunk. Default 80 fits Vercel Hobby's 60s
 // function limit (~0.4s/recipient + batch pauses ≈ 45s); raise WA_SEND_CHUNK on
@@ -74,6 +75,31 @@ export async function drainWhatsAppCampaignQueue(
   let failedNow = 0;
   let processedNow = 0;
   let lastErrors: string[] = [];
+
+  // Preflight against the approved template BEFORE claiming anything. A
+  // mismatch (missing image header, wrong language, wrong variable count)
+  // fails every message identically, so checking once saves the whole
+  // audience. Nothing is dequeued — fix the campaign and the next tick sends.
+  const problem = await findTemplateSendProblem({
+    templateName: campaign.templateName,
+    languageCode: campaign.languageCode,
+    variables: campaign.variables,
+    headerImageUrl,
+  });
+  if (problem) {
+    const queuedRemaining = await countPendingWhatsAppQueue(campaignId);
+    const counts = await getWhatsAppCampaignLogCounts(campaignId);
+    await updateWhatsAppCampaign(campaignId, {
+      status: 'failed',
+      sentCount: counts.sent,
+      failedCount: counts.failed,
+      errorSummary: problem,
+    });
+    return {
+      processedNow: 0, sentNow: 0, failedNow: 0, queuedRemaining,
+      sentTotal: counts.sent, failedTotal: counts.failed, status: 'failed',
+    };
+  }
 
   if (claimCount > 0) {
     const chunk = await claimPendingWhatsAppQueue(campaignId, claimCount);
@@ -145,6 +171,19 @@ export async function startCampaignSend(
   const creds = getBroadcastCreds();
   if (!creds.waAccessToken || !creds.waPhoneId) {
     return { enqueued: 0, sentNow: 0, queuedRemaining: 0, status: campaign.status, message: 'WhatsApp broadcast credentials not configured.' };
+  }
+
+  // Surface a template mismatch in the admin's own request rather than letting
+  // them watch a "queued" toast turn into a fully failed campaign minutes later.
+  const problem = await findTemplateSendProblem({
+    templateName: campaign.templateName,
+    languageCode: campaign.languageCode,
+    variables: campaign.variables,
+    headerImageUrl: opts.headerImageUrl ?? campaign.headerImageUrl,
+  });
+  if (problem) {
+    await updateWhatsAppCampaign(campaign.id, { status: 'failed', errorSummary: problem });
+    return { enqueued: 0, sentNow: 0, queuedRemaining: 0, status: 'failed', message: problem };
   }
 
   const enqueued = await enqueueWhatsAppRecipients(campaign.id, recipients);
@@ -258,8 +297,25 @@ export async function drainWhatsAppAutoSends(maxItems = 150): Promise<{ sent: nu
     }
     if (toSend.length === 0) continue;
 
+    // Same preflight as a manual campaign. On a mismatch we deliberately leave
+    // the rows PENDING instead of burning them: the automation is one field away
+    // from working, and a reminder is worth more re-sent late than marked failed.
+    // The reason lands on the config campaign, where the admin UI shows it.
+    const problem = await findTemplateSendProblem({
+      templateName: campaign.templateName,
+      languageCode: campaign.languageCode,
+      variables: campaign.variables,
+      headerImageUrl: campaign.headerImageUrl,
+    });
+    if (problem) {
+      console.error(`[WhatsApp] Auto-send "${campaign.autoSendTrigger}" held: ${problem}`);
+      await updateWhatsAppCampaign(campaign.id, { status: 'failed', errorSummary: problem });
+      skipped += toSend.length;
+      continue;
+    }
+
     try {
-      await sendWhatsAppCampaign({
+      const result = await sendWhatsAppCampaign({
         campaignId: campaign.id,
         templateName: campaign.templateName,
         languageCode: campaign.languageCode,
@@ -267,7 +323,14 @@ export async function drainWhatsAppAutoSends(maxItems = 150): Promise<{ sent: nu
         recipients: toSend.map(d => ({ phone: d.phone, fullName: d.recipientName })),
         headerImageUrl: campaign.headerImageUrl,
       });
-      for (const d of toSend) { await markScheduledWhatsAppSend(d.id, 'sent'); sent++; }
+      // Don't report a send that Meta rejected as 'sent' — when nothing landed,
+      // record why, so a broken automation is visible instead of looking healthy.
+      if (result.sentCount === 0 && result.failedCount > 0) {
+        const reason = result.errors[0] ?? 'Meta rejected every message';
+        for (const d of toSend) { await markScheduledWhatsAppSend(d.id, 'failed', reason); failed++; }
+      } else {
+        for (const d of toSend) { await markScheduledWhatsAppSend(d.id, 'sent'); sent++; }
+      }
     } catch (err) {
       for (const d of toSend) { await markScheduledWhatsAppSend(d.id, 'failed', String(err)); failed++; }
     }
