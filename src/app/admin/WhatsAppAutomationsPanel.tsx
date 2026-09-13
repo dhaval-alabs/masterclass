@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, Zap, Check } from "lucide-react";
+import { Loader2, Zap, Check, Plus, Trash2 } from "lucide-react";
 
 type Trigger =
   | "unverified" | "verified" | "noshow"
@@ -21,10 +21,30 @@ interface FormState {
   templateName: string;
   languageCode: string;
   variables: string; // newline-separated in the UI
+  headerImageUrl: string;
+  uploading: boolean;
+  uploadError: string | null;
   delayValue: number;
   delayUnit: "minutes" | "hours" | "days";
   saving: boolean;
   saved: boolean;
+}
+
+interface WaTemplateLite {
+  name: string;
+  language: string;
+  components?: { type: string; format?: string }[];
+}
+
+// A template with an IMAGE/VIDEO/DOCUMENT header needs a media parameter on
+// EVERY message. Sending without one is rejected by Meta with the unhelpful
+// "(#132012) Parameter format does not match format in the created template",
+// which is why this field exists rather than being left to the campaign screen.
+function templateNeedsHeaderImage(t: WaTemplateLite | undefined): boolean {
+  return !!t?.components?.some(
+    c => c.type?.toUpperCase() === "HEADER" &&
+         ["IMAGE", "VIDEO", "DOCUMENT"].includes((c.format ?? "TEXT").toUpperCase()),
+  );
 }
 
 const META: Record<Trigger, { title: string; desc: string; showDelay: boolean }> = {
@@ -41,7 +61,7 @@ const META: Record<Trigger, { title: string; desc: string; showDelay: boolean }>
 const ORDER: Trigger[] = ["unverified", "verified", "reminder_t3d", "reminder_t1d", "reminder_t1h", "noshow"];
 
 function blankForm(): FormState {
-  return { enabled: false, templateName: "", languageCode: "en_US", variables: "{name}", delayValue: 15, delayUnit: "minutes", saving: false, saved: false };
+  return { enabled: false, templateName: "", languageCode: "en_US", variables: "{name}", headerImageUrl: "", uploading: false, uploadError: null, delayValue: 15, delayUnit: "minutes", saving: false, saved: false };
 }
 
 export default function WhatsAppAutomationsPanel() {
@@ -51,7 +71,7 @@ export default function WhatsAppAutomationsPanel() {
   // Approved templates, so the name can be PICKED rather than typed. A typo in a
   // free-text field is invisible until send time, when Meta rejects the unknown
   // template and the automation silently does nothing.
-  const [templates, setTemplates] = useState<{ name: string; language: string }[] | null>(null);
+  const [templates, setTemplates] = useState<WaTemplateLite[] | null>(null);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
   useEffect(() => {
     fetch("/api/admin/whatsapp/templates")
@@ -60,7 +80,7 @@ export default function WhatsAppAutomationsPanel() {
         if (!r.ok) throw new Error(d?.error ?? `HTTP ${r.status}`);
         const approved = (d.templates ?? [])
           .filter((t: { status?: string }) => (t.status ?? "").toUpperCase() === "APPROVED")
-          .map((t: { name: string; language: string }) => ({ name: t.name, language: t.language }));
+          .map((t: WaTemplateLite) => ({ name: t.name, language: t.language, components: t.components ?? [] }));
         setTemplates(approved);
       })
       .catch(e => setTemplatesError(e instanceof Error ? e.message : String(e)));
@@ -79,7 +99,7 @@ export default function WhatsAppAutomationsPanel() {
         for (const t of ORDER) {
           const c = a[t];
           next[t] = c
-            ? { enabled: true, templateName: c.templateName, languageCode: c.languageCode, variables: (c.variables ?? []).join("\n"), delayValue: c.delayValue, delayUnit: c.delayUnit, saving: false, saved: false }
+            ? { enabled: true, templateName: c.templateName, languageCode: c.languageCode, variables: (c.variables ?? []).join("\n"), headerImageUrl: c.headerImageUrl ?? "", uploading: false, uploadError: null, delayValue: c.delayValue, delayUnit: c.delayUnit, saving: false, saved: false }
             : blankForm();
         }
         return next;
@@ -100,6 +120,11 @@ export default function WhatsAppAutomationsPanel() {
   async function save(t: Trigger) {
     const f = forms[t];
     if (f.enabled && !f.templateName.trim()) { setError("Enter the approved template name first."); return; }
+    const picked = templates?.find(x => x.name === f.templateName.trim());
+    if (f.enabled && templateNeedsHeaderImage(picked) && !f.headerImageUrl.trim()) {
+      setError(`"${f.templateName.trim()}" has an image header — add the header image, or every message will be rejected by Meta.`);
+      return;
+    }
     setError(null);
     patch(t, { saving: true });
     try {
@@ -112,6 +137,7 @@ export default function WhatsAppAutomationsPanel() {
           templateName: f.templateName.trim(),
           languageCode: f.languageCode.trim() || "en_US",
           variables: f.variables.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
+          headerImageUrl: f.headerImageUrl.trim() || null,
           delayValue: f.delayValue,
           delayUnit: f.delayUnit,
         }),
@@ -123,6 +149,20 @@ export default function WhatsAppAutomationsPanel() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed.");
       patch(t, { saving: false });
+    }
+  }
+
+  async function uploadHeader(t: Trigger, file: File) {
+    patch(t, { uploading: true, uploadError: null });
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `Upload failed (HTTP ${res.status})`);
+      patch(t, { headerImageUrl: data.url, uploading: false });
+    } catch (err) {
+      patch(t, { uploading: false, uploadError: err instanceof Error ? err.message : "Upload failed" });
     }
   }
 
@@ -169,12 +209,20 @@ export default function WhatsAppAutomationsPanel() {
                             const picked = templates.find(x => x.name === e.target.value);
                             // Language belongs to the template, so set it from the
                             // pick instead of leaving a stale code behind.
-                            patch(t, { templateName: e.target.value, languageCode: picked?.language ?? f.languageCode });
+                            patch(t, {
+                              templateName: e.target.value,
+                              languageCode: picked?.language ?? f.languageCode,
+                              // A header image on a text-header template is
+                              // rejected just as hard as a missing one.
+                              ...(templateNeedsHeaderImage(picked) ? {} : { headerImageUrl: "" }),
+                            });
                           }}
                         >
                           <option value="">Select an approved template…</option>
                           {templates.map(x => (
-                            <option key={`${x.name}:${x.language}`} value={x.name}>{x.name} ({x.language})</option>
+                            <option key={`${x.name}:${x.language}`} value={x.name}>
+                              {x.name} ({x.language}){templateNeedsHeaderImage(x) ? " · image header" : ""}
+                            </option>
                           ))}
                         </select>
                       ) : (
@@ -193,6 +241,38 @@ export default function WhatsAppAutomationsPanel() {
                       </p>
                     )}
                     <textarea className={`${input} w-full font-mono`} rows={2} placeholder={"Variables, one per line\n{name}"} value={f.variables} onChange={e => patch(t, { variables: e.target.value })} />
+
+                    {templateNeedsHeaderImage(templates?.find(x => x.name === f.templateName)) && (
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-500">
+                          Header image <span className="font-normal text-red-500">· required by this template</span>
+                        </label>
+                        {f.headerImageUrl ? (
+                          <div className="mt-1.5 flex items-center gap-2">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={f.headerImageUrl} alt="Header" className="w-12 h-12 object-cover rounded-lg border border-slate-200" />
+                            <a href={f.headerImageUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#003368] underline truncate flex-1">{f.headerImageUrl}</a>
+                            <button type="button" onClick={() => patch(t, { headerImageUrl: "" })} title="Remove"
+                              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <label className={`mt-1.5 flex items-center justify-center gap-2 w-full border border-dashed border-red-300 bg-red-50/50 rounded-lg px-3 py-2.5 text-xs cursor-pointer hover:border-[#00DF83] hover:bg-[#00DF83]/5 transition-colors ${f.uploading ? "opacity-60 pointer-events-none" : ""}`}>
+                            {f.uploading
+                              ? <><Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" /> Uploading…</>
+                              : <><Plus className="w-3.5 h-3.5" /> Upload header image</>}
+                            <input type="file" accept="image/*" className="hidden"
+                              onChange={e => { const file = e.target.files?.[0]; if (file) uploadHeader(t, file); e.currentTarget.value = ""; }} />
+                          </label>
+                        )}
+                        {f.uploadError && <p className="text-[11px] text-red-500 mt-1">{f.uploadError}</p>}
+                        <p className="text-[11px] text-slate-400 mt-1">
+                          Meta rejects every message on an image-header template that is sent without one.
+                        </p>
+                      </div>
+                    )}
+
                     {meta.showDelay && (
                       <div className="flex items-center gap-2 text-sm text-slate-600">
                         <span className="text-xs font-semibold">Send after</span>
