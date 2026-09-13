@@ -94,6 +94,8 @@ export async function findTemplateSendProblem(params: {
   languageCode: string;
   variables: string[];
   headerImageUrl?: string | null;
+  /** Where the admin has to go to fix it. Changes the advice, not the check. */
+  context?: 'campaign' | 'automation';
 }): Promise<string | null> {
   const specs = await listWaTemplateSpecs();
   if (!specs) return null;
@@ -117,7 +119,12 @@ export async function findTemplateSendProblem(params: {
   // The one that burned us: an IMAGE/VIDEO/DOCUMENT header needs a media
   // parameter on every single message. Without it Meta answers #132012.
   if (spec.headerFormat && spec.headerFormat !== 'TEXT' && spec.headerFormat !== 'LOCATION' && !headerImageUrl?.trim()) {
-    return `Template "${templateName}" has an ${spec.headerFormat} header, so every message must carry a header image — none is set. Add the header image, then send again.`;
+    // Setting the image on the automation does NOT fix an older campaign row:
+    // they are separate records, each carrying its own image. Say where to go.
+    const fix = params.context === 'automation'
+      ? 'Add it under “Automatic WhatsApp messages” and it will send on the next run.'
+      : 'Press “Load” on this campaign, upload the header image, then Retry — the image lives on each campaign, so setting it on the automation does not backfill this one.';
+    return `Template "${templateName}" has an ${spec.headerFormat} header, so every message must carry a header image — none is set. ${fix}`;
   }
   if ((!spec.headerFormat || spec.headerFormat === 'TEXT') && headerImageUrl?.trim()) {
     return `Template "${templateName}" has no image header, but a header image is set. Remove it — Meta rejects extra parameters.`;

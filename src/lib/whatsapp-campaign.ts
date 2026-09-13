@@ -86,6 +86,7 @@ export async function drainWhatsAppCampaignQueue(
     languageCode: campaign.languageCode,
     variables: campaign.variables,
     headerImageUrl,
+    context: 'campaign',
   });
   if (problem) {
     const queuedRemaining = await countPendingWhatsAppQueue(campaignId);
@@ -181,6 +182,7 @@ export async function startCampaignSend(
     languageCode: campaign.languageCode,
     variables: campaign.variables,
     headerImageUrl: opts.headerImageUrl ?? campaign.headerImageUrl,
+    context: 'campaign',
   });
   if (problem) {
     await updateWhatsAppCampaign(campaign.id, { status: 'failed', errorSummary: problem });
@@ -313,6 +315,7 @@ export async function drainWhatsAppAutoSends(maxItems = 150): Promise<{ sent: nu
       languageCode: campaign.languageCode,
       variables: campaign.variables,
       headerImageUrl: campaign.headerImageUrl,
+      context: 'automation',
     });
     if (problem) {
       console.error(`[WhatsApp] Auto-send "${campaign.autoSendTrigger}" held: ${problem}`);
