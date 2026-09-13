@@ -5,7 +5,7 @@ import { verifyAdminSession } from '@/lib/auth';
 import {
   listWhatsAppAutomations,
   disableWhatsAppAutomations,
-  createWhatsAppCampaign,
+  upsertWhatsAppAutomation,
   getActiveWebinarSession,
   type WhatsAppTrigger,
 } from '@/lib/db';
@@ -63,17 +63,15 @@ export async function POST(req: NextRequest) {
 
     const delayUnit = (['minutes', 'hours', 'days'].includes(body.delayUnit ?? '') ? body.delayUnit : 'minutes') as 'minutes' | 'hours' | 'days';
     const session = await getActiveWebinarSession();
-    const campaign = await createWhatsAppCampaign({
+    // Reuses this trigger's existing config row rather than inserting another
+    // one, so editing an automation doesn't leave a trail of duplicates.
+    const campaign = await upsertWhatsAppAutomation({
+      trigger,
       sessionId: session?.id ?? null,
       templateName: body.templateName.trim(),
       languageCode: body.languageCode?.trim() || 'en_US',
-      audience: 'all',
       variables: Array.isArray(body.variables) ? body.variables.map(v => String(v)) : [],
       headerImageUrl: body.headerImageUrl ?? null,
-      totalRecipients: 0,
-      status: 'draft',
-      autoSendEnabled: true,
-      autoSendTrigger: trigger,
       delayValue: typeof body.delayValue === 'number' && body.delayValue >= 0 ? body.delayValue : 15,
       delayUnit,
     });
