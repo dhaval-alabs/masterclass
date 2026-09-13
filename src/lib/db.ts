@@ -3246,7 +3246,38 @@ export async function listWhatsAppCampaigns(sessionId?: string | null): Promise<
   if (sessionId) q = q.eq('session_id', sessionId);
   const { data, error } = await q;
   if (error) throw error;
-  return (data ?? []).map(r => mapWhatsAppCampaign(r as Record<string, unknown>));
+  const campaigns = (data ?? []).map(r => mapWhatsAppCampaign(r as Record<string, unknown>));
+
+  // An automation's config lives in this table too, but it is settings, not a
+  // campaign: listing it here both clutters the list and puts a "Send to All"
+  // button on something the admin only meant to configure. Once it has actually
+  // sent, it IS history and stays visible.
+  //
+  // "Has sent" must come from the send log, not the stored counters: an
+  // automation delivers through drainWhatsAppAutoSends, which writes log rows
+  // but never updates the campaign's counters, so a working automation still
+  // reads 0 sent / draft.
+  const candidates = campaigns.filter(c => c.autoSendTrigger !== null && c.status === 'draft');
+  if (candidates.length === 0) return campaigns;
+  const withSends = await whatsAppCampaignIdsWithSends(candidates.map(c => c.id));
+  return campaigns.filter(c => !(c.autoSendTrigger !== null && c.status === 'draft' && !withSends.has(c.id)));
+}
+
+/**
+ * Which of these campaigns have at least one send-log row. Fails OPEN (treats
+ * every id as having sent) so a query error can never hide real history.
+ */
+async function whatsAppCampaignIdsWithSends(ids: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const results = await Promise.all(ids.map(async id => {
+    const { count, error } = await client()
+      .schema('excel_to_ai')
+      .from('whatsapp_send_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('campaign_id', id);
+    return error || (count ?? 0) > 0 ? id : null;
+  }));
+  return new Set(results.filter((id): id is string => id !== null));
 }
 
 export async function getWhatsAppCampaignById(id: string): Promise<WhatsAppCampaign | null> {
@@ -3300,6 +3331,80 @@ export async function listWhatsAppAutomations(): Promise<Record<WhatsAppTrigger,
   const found = await Promise.all(triggers.map(t => getAutoSendWhatsAppCampaign(t)));
   return Object.fromEntries(triggers.map((t, i) => [t, found[i]])) as
     Record<WhatsAppTrigger, WhatsAppCampaign | null>;
+}
+
+/**
+ * Saves the config for one trigger, reusing the existing config row when it has
+ * never sent anything. Previously every Save inserted a new campaign, so five
+ * edits left five near-identical rows behind. A config row that HAS sent is
+ * left alone — it is a real send record, and rewriting it would rewrite history.
+ */
+export async function upsertWhatsAppAutomation(params: {
+  trigger: WhatsAppTrigger;
+  sessionId: string | null;
+  templateName: string;
+  languageCode: string;
+  variables: string[];
+  headerImageUrl: string | null;
+  delayValue: number;
+  delayUnit: 'minutes' | 'hours' | 'days';
+}): Promise<WhatsAppCampaign> {
+  const { data: existing } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_campaigns')
+    .select('*')
+    .eq('auto_send_trigger', params.trigger)
+    .eq('status', 'draft')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  // Only reuse a row that never sent anything. Rewriting the template on a row
+  // that already delivered would relabel real history.
+  const reusableId = existing
+    ? [...(await whatsAppCampaignIdsWithSends([(existing as Record<string, unknown>).id as string]))].length === 0
+      ? ((existing as Record<string, unknown>).id as string)
+      : null
+    : null;
+
+  const row = {
+    session_id:        params.sessionId,
+    template_name:     params.templateName,
+    language_code:     params.languageCode,
+    variables:         params.variables,
+    header_image_url:  params.headerImageUrl,
+    auto_send_enabled: true,
+    auto_send_trigger: params.trigger,
+    delay_value:       params.delayValue,
+    delay_unit:        params.delayUnit,
+  };
+
+  if (reusableId) {
+    const { data, error } = await client()
+      .schema('excel_to_ai')
+      .from('whatsapp_campaigns')
+      .update(row)
+      .eq('id', reusableId)
+      .select()
+      .single();
+    if (error) throw error;
+    return mapWhatsAppCampaign(data as Record<string, unknown>);
+  }
+
+  return createWhatsAppCampaign({
+    sessionId: params.sessionId,
+    templateName: params.templateName,
+    languageCode: params.languageCode,
+    audience: 'all',
+    variables: params.variables,
+    headerImageUrl: params.headerImageUrl,
+    totalRecipients: 0,
+    status: 'draft',
+    autoSendEnabled: true,
+    autoSendTrigger: params.trigger,
+    delayValue: params.delayValue,
+    delayUnit: params.delayUnit,
+  });
 }
 
 // Disable any existing config(s) for a trigger (called before saving a new one
