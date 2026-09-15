@@ -6,14 +6,20 @@
 // Env:
 //   OTP_API_SECRET    (required)  — same value configured on the portal
 //   OTP_API_BASE_URL  (optional)  — defaults to https://waba.analytixlabs.co.in
-//   OTP_AREA          (optional)  — routing area / number. If UNSET or blank, the
-//                                   "area" field is OMITTED on send and WABA routes
-//                                   to the DEFAULT number. Set it only to force a
-//                                   named area (e.g. "PPC").
+//   OTP_AREA          (optional)  — routing area / number. Defaults to "PPC"
+//                                   (see below); set this to override.
 
 const BASE_URL = (process.env.OTP_API_BASE_URL || 'https://waba.analytixlabs.co.in').replace(/\/+$/, '');
-// Empty string ⇒ omit "area" on send ⇒ WABA uses the default number.
-const DEFAULT_AREA = process.env.OTP_AREA || '';
+// The WABA service's DEFAULT number (used when "area" is omitted) is the
+// "Organic" channel — confirmed via Meta Graph API on 15 Sep 2026 to be
+// BANNED (quality_rating RED, status BANNED). It accepts the send API call
+// and returns a real message id, so failures here are invisible to both this
+// client and the caller — the code silently never arrives. "PPC" is the
+// "PPC SM" channel, confirmed healthy (quality_rating GREEN, CONNECTED) the
+// same day. Defaulting here — not leaving it to an env var — means masterclass
+// can't regress to the banned number by a missing/blank OTP_AREA the way
+// OTP_API_SECRET once regressed to a placeholder value in .env.local.
+const DEFAULT_AREA = process.env.OTP_AREA || 'PPC';
 
 function secret(): string {
   const s = process.env.OTP_API_SECRET;
