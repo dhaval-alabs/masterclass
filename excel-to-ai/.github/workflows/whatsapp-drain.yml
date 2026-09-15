@@ -1,0 +1,23 @@
+name: WhatsApp queue drain
+
+# Vercel Hobby crons only run ~once/day, which is too slow to drain the WhatsApp
+# send queue. This free GitHub Actions schedule pings the drain endpoint every
+# ~5 minutes instead, so queued broadcasts finish promptly. (On Vercel Pro you
+# can rely on vercel.json's cron and disable this workflow.)
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # every 5 minutes (GitHub may delay under load)
+  workflow_dispatch: {}      # allows a manual run from the Actions tab
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger WhatsApp queue drain
+        run: |
+          curl -fsS -X POST \
+            "https://masterclass.analytixlabs.co.in/api/cron/process-whatsapp-queue" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -w '\nHTTP %{http_code}\n' \
+          || echo "drain request failed (will retry next tick)"

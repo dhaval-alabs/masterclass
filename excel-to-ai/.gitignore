@@ -2,8 +2,6 @@
 
 # dependencies
 /node_modules
-node_modules/
-**/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -17,8 +15,6 @@ node_modules/
 
 # next.js
 /.next/
-.next/
-**/.next/
 /out/
 
 # production
@@ -39,8 +35,6 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
-.env
-**/.env
 !.env.example
 
 # vercel
@@ -51,6 +45,3 @@ yarn-error.log*
 next-env.d.ts
 public/uploads/
 data/db.json
-
-# claude
-.claude/
