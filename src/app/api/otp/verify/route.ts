@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from 'next/server';
-import crypto from 'crypto';
-import fs from 'fs';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation, scheduleWhatsAppForRecipient, cancelPendingScheduledWhatsApp, getWebinarConfig, scheduleWebinarReminders } from '@/lib/db';
 import { registerWebinarParticipant } from '@/lib/zoom';
 import { verifyOtpCode } from '@/lib/otpService';
