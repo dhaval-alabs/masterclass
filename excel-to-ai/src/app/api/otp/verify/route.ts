@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from 'next/server';
-import crypto from 'crypto';
-import fs from 'fs';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation, scheduleWhatsAppForRecipient, cancelPendingScheduledWhatsApp } from '@/lib/db';
 import { registerWebinarParticipant } from '@/lib/zoom';
 import { scoreAndSave, type ConversationTurn } from '@/lib/qualify';

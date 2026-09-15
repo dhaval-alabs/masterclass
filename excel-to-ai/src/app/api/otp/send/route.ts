@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 // Lead capture (DB / LSQ / Sheets) now happens in /api/lead/capture at form-submit time.
 // This route only generates + sends the OTP and builds the signed token.
 // Zoom registration is intentionally deferred to /api/otp/verify so Zoom's
