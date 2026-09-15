@@ -12,14 +12,19 @@ import {
   updateWebinarSession,
   getWebinarSessionById,
   deleteWebinarSession,
+  logSessionAudit,
+  type WebinarSession,
 } from '@/lib/db';
-import { verifyAdminSession } from '@/lib/auth';
+import { verifyAdminSession, type AdminSession } from '@/lib/auth';
 import { assertSameOrigin } from '@/lib/security';
 
-async function requireAdmin(): Promise<boolean> {
+async function requireAdmin(): Promise<AdminSession | null> {
   const token = (await cookies()).get('admin_session')?.value;
-  const session = await verifyAdminSession(token);
-  return session !== null;
+  return verifyAdminSession(token);
+}
+
+function requestIp(request: Request): string | null {
+  return request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip') ?? null;
 }
 
 export async function PATCH(
@@ -28,7 +33,8 @@ export async function PATCH(
 ) {
   const origin = assertSameOrigin(request);
   if (!origin.ok) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  if (!(await requireAdmin())) return new NextResponse('Unauthorized', { status: 401 });
+  const admin = await requireAdmin();
+  if (!admin) return new NextResponse('Unauthorized', { status: 401 });
 
   const { id } = await params;
 
@@ -36,12 +42,22 @@ export async function PATCH(
     const body = await request.json();
     const action: string = body.action;
 
+    // Snapshot the row before mutating so the audit log can record exactly
+    // what changed, not just that "an update happened". Added after
+    // otp_required was found flipped off on the live session for ~3 hours
+    // with no way to tell who did it — a plain fire-and-forget PATCH left no
+    // trace at all.
+    const before = (await getWebinarSessionById(id).catch(() => null)) as WebinarSession | null;
+    const ip = requestIp(request);
+
     if (action === 'activate') {
       const session = await activateWebinarSession(id);
+      logSessionAudit({ sessionId: id, adminEmail: admin.sub, action: 'activate', before, after: session, ip });
       return NextResponse.json({ session });
     }
     if (action === 'end') {
       const session = await endWebinarSession(id);
+      logSessionAudit({ sessionId: id, adminEmail: admin.sub, action: 'end', before, after: session, ip });
       return NextResponse.json({ session });
     }
     if (action === 'update') {
@@ -57,6 +73,7 @@ export async function PATCH(
         metaEventSuffix: body.metaEventSuffix,
         otpRequired: body.otpRequired,
       });
+      logSessionAudit({ sessionId: id, adminEmail: admin.sub, action: 'update', before, after: session, ip });
       return NextResponse.json({ session });
     }
 

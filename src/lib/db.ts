@@ -1996,6 +1996,76 @@ export async function getWebinarSessionById(id: string): Promise<WebinarSession 
   return data ? mapSession(data) : null;
 }
 
+/**
+ * Records who changed a session, what action, and which fields actually
+ * changed (only fields whose value differs make it in — a same-value PATCH
+ * logs nothing). Added after otp_required was found flipped off on the live
+ * session for ~3 hours with no way to tell who did it. Best-effort: a logging
+ * failure must never break the admin action it's recording.
+ */
+export async function logSessionAudit(params: {
+  sessionId: string;
+  adminEmail: string;
+  action: 'activate' | 'end' | 'update';
+  // Accepts any plain object (e.g. a WebinarSession) — callers pass domain
+  // types, not hand-built records, so this only needs read access to compute
+  // a diff, never to construct one.
+  before: object | null;
+  after: object | null;
+  ip?: string | null;
+}): Promise<void> {
+  try {
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    if (params.before && params.after) {
+      const beforeRec = params.before as Record<string, unknown>;
+      const afterRec = params.after as Record<string, unknown>;
+      const keys = new Set([...Object.keys(beforeRec), ...Object.keys(afterRec)]);
+      for (const k of keys) {
+        const from = beforeRec[k];
+        const to = afterRec[k];
+        if (JSON.stringify(from) !== JSON.stringify(to)) changes[k] = { from, to };
+      }
+    }
+    // Nothing actually changed (e.g. re-saving identical values) — don't
+    // clutter the log with a no-op entry.
+    if (params.action === 'update' && Object.keys(changes).length === 0) return;
+
+    const { error } = await client()
+      .from('session_audit_log')
+      .insert({
+        session_id: params.sessionId,
+        admin_email: params.adminEmail,
+        action: params.action,
+        changes,
+        ip: params.ip ?? null,
+      });
+    if (error) throw error;
+  } catch (err) {
+    console.error('[db.logSessionAudit] failed (action not blocked):', err);
+  }
+}
+
+export async function getSessionAuditLog(sessionId: string, limit = 50): Promise<Array<{
+  createdAt: string;
+  adminEmail: string;
+  action: string;
+  changes: Record<string, { from: unknown; to: unknown }>;
+}>> {
+  const { data, error } = await client()
+    .from('session_audit_log')
+    .select('created_at, admin_email, action, changes')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []).map(r => ({
+    createdAt: r.created_at as string,
+    adminEmail: r.admin_email as string,
+    action: r.action as string,
+    changes: (r.changes as Record<string, { from: unknown; to: unknown }>) ?? {},
+  }));
+}
+
 export async function createWebinarSession(input: {
   code: string;
   title: string;
