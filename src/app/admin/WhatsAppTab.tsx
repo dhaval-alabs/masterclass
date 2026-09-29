@@ -27,7 +27,23 @@ interface WaCampaign {
   createdAt: string;
   sentAt: string | null;
   scheduledFor: string | null;
+  // Set only on campaigns that were fired BY an automation (welcome, OTP nudge,
+  // reminders, no-show follow-up) rather than a manual "Send" click. Already
+  // present on the API response (WhatsAppCampaign.autoSendTrigger) — just not
+  // typed here before, so the UI had no way to tell the two apart.
+  autoSendTrigger: "unverified" | "verified" | "noshow" | "reminder_t3d" | "reminder_t1d" | "reminder_t1h" | null;
 }
+
+// Human label for each automation trigger, for the badge on its campaign row.
+// Kept in sync with WhatsAppAutomationsPanel's own META titles.
+const AUTO_TRIGGER_LABEL: Record<NonNullable<WaCampaign["autoSendTrigger"]>, string> = {
+  unverified:   "Auto · Didn't verify OTP",
+  verified:     "Auto · Verified → welcome",
+  noshow:       "Auto · No-show follow-up",
+  reminder_t3d: "Auto · Reminder (3 days)",
+  reminder_t1d: "Auto · Reminder (1 day)",
+  reminder_t1h: "Auto · Reminder (1 hour)",
+};
 
 interface WaTemplateButton {
   type: string;            // URL | QUICK_REPLY | PHONE_NUMBER
@@ -1437,8 +1453,22 @@ export default function WhatsAppTab() {
             No campaigns yet. Send your first WhatsApp campaign above.
           </div>
         ) : (
-          <div className="rounded-xl border border-slate-200 overflow-hidden">
-            {campaigns.map((c, idx) => {
+          <div className="space-y-5">
+            {/* Automatic vs one-time is the single most-asked question about this
+                list — an automation's campaign row looks identical to a manual
+                send otherwise, and "is it actually enabled" is invisible without
+                opening the automations panel separately. Group + badge instead. */}
+            {(() => {
+              const automatic = campaigns.filter(c => c.autoSendTrigger);
+              const oneTime   = campaigns.filter(c => !c.autoSendTrigger);
+              const group = (title: string, hint: string, list: WaCampaign[]) => list.length === 0 ? null : (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">{title}</h4>
+                    <span className="text-[10px] text-slate-400">({list.length}) — {hint}</span>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 overflow-hidden">
+                    {list.map((c, idx) => {
               const isExpanded = expandedId === c.id;
               const tab = logsTab[c.id] ?? "stats";
               const logs = campaignLogs[c.id];
@@ -1451,7 +1481,14 @@ export default function WhatsAppTab() {
                       <MessageSquare className="w-4 h-4 text-[#1da851]" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-slate-800 text-sm truncate font-mono">{c.templateName}</div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="font-semibold text-slate-800 text-sm truncate font-mono">{c.templateName}</div>
+                        {c.autoSendTrigger && (
+                          <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-[#00875A] bg-[#00DF83]/10 border border-[#00DF83]/30 rounded-full px-2 py-0.5">
+                            {AUTO_TRIGGER_LABEL[c.autoSendTrigger]}
+                          </span>
+                        )}
+                      </div>
                       <div className="text-[11px] text-slate-400 truncate mt-0.5">
                         {c.variables.filter(Boolean).join(" · ") || "No variables"} · {c.languageCode}
                       </div>
@@ -1853,7 +1890,21 @@ export default function WhatsAppTab() {
                   )}
                 </div>
               );
-            })}
+                    })}
+                  </div>
+                </div>
+              );
+              return (
+                <>
+                  {group(
+                    "Automatic",
+                    "fires per person from a trigger — welcome, reminder, OTP nudge, or no-show follow-up",
+                    automatic,
+                  )}
+                  {group("One-time sends", "a manual broadcast you sent once", oneTime)}
+                </>
+              );
+            })()}
           </div>
         )}
       </div>
