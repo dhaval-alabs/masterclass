@@ -480,7 +480,12 @@ export default function BroadcastTab() {
           <div className="flex gap-3 items-center flex-wrap">
             <button onClick={() => setWhen("now")} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border ${when === "now" ? "border-[#003368] bg-[#003368] text-white" : "border-slate-200 text-slate-600"}`}><Send className="w-4 h-4" /> Send now</button>
             <button onClick={() => setWhen("schedule")} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border ${when === "schedule" ? "border-[#003368] bg-[#003368] text-white" : "border-slate-200 text-slate-600"}`}><Clock className="w-4 h-4" /> Schedule</button>
-            {when === "schedule" && <input type="datetime-local" value={scheduledFor} onChange={e => setScheduledFor(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />}
+            {when === "schedule" && (
+              <div className="flex items-center gap-2">
+                <input type="datetime-local" value={scheduledFor} onChange={e => setScheduledFor(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                <span className="text-xs text-slate-400 font-semibold">IST — your device&apos;s local time</span>
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -505,7 +510,7 @@ export default function BroadcastTab() {
           <p className="text-sm text-slate-600 mb-4">
             This will send a <span className="font-semibold">{channel === "whatsapp" ? "WhatsApp message" : "email"}</span> to{" "}
             <span className="font-semibold text-[#003368]">{recipientCount === null ? "the selected audience" : `~${recipientCount.toLocaleString()} ${recipientCount === 1 ? "person" : "people"}`}</span>
-            {when === "schedule" && canSchedule ? <> at <span className="font-semibold">{scheduledFor.replace("T", " ")}</span></> : <> right now</>}. This cannot be undone.
+            {when === "schedule" && canSchedule ? <> at <span className="font-semibold">{scheduledFor.replace("T", " ")} IST</span></> : <> right now</>}. This cannot be undone.
           </p>
           <div className="flex gap-3">
             <button onClick={handleSend} disabled={isSending} className="flex-1 py-3 rounded-xl bg-[#00DF83] text-[#003368] font-bold hover:brightness-95 disabled:opacity-60 flex items-center justify-center gap-2">

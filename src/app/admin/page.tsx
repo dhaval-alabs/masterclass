@@ -11,6 +11,7 @@ import WhatsAppTab from "./WhatsAppTab";
 import AnalyticsTab from "./AnalyticsTab";
 import BroadcastTab from "./BroadcastTab";
 import SpeakerSubmissionsTab from "./SpeakerSubmissionsTab";
+import { fromIstPicker, toIstPickerValue, formatIst } from "@/lib/ist";
 
 type FaqItem = { id: string; q: string; a: string; order: number };
 type FeatureItem = { id: string; icon: string | null; title: string; description: string; accent: string | null; sortOrder: number };
@@ -1661,7 +1662,12 @@ export default function AdminPortal() {
                   <WebinarSection title="Date & Time">
                     <Field label="Date label (display)"  value={webinar.webinarDateLabel ?? ''}  onChange={v => updateWebinarField('webinarDateLabel', v)}  placeholder="Sat, 6 June 2026" />
                     <Field label="Time label (display)"  value={webinar.webinarTimeLabel ?? ''}  onChange={v => updateWebinarField('webinarTimeLabel', v)}  placeholder="7:00 PM IST" />
-                    <Field label="Datetime UTC (for countdown)" value={webinar.webinarDatetimeUtc ?? ''} onChange={v => updateWebinarField('webinarDatetimeUtc', v)} placeholder="2026-06-06T13:30:00+00:00" hint="ISO 8601 in UTC. e.g. 7:00 PM IST = 13:30 UTC." />
+                    <IstDateTimeField
+                      label="Webinar date & time (IST)"
+                      value={webinar.webinarDatetimeUtc ?? ''}
+                      onChange={v => updateWebinarField('webinarDatetimeUtc', v)}
+                      hint="Fallback only — while a session is active (Sessions tab), its own date/time is what actually drives the countdown and reminders, not this."
+                    />
                     <Field label="Duration label" value={webinar.durationLabel ?? ''} onChange={v => updateWebinarField('durationLabel', v)} placeholder="90 Min" />
                   </WebinarSection>
 
@@ -2142,6 +2148,36 @@ function Field({ label, value, onChange, placeholder, hint }: { label: string; v
       <label className="block text-xs font-semibold mb-1 text-slate-600 uppercase tracking-wide">{label}</label>
       <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-[#00DF83]/50 focus:border-[#00DF83] bg-white" />
       {hint && <p className="text-[11px] text-slate-400 mt-1">{hint}</p>}
+    </div>
+  );
+}
+
+// Was a raw text field asking the admin to hand-type a UTC ISO string
+// ("2026-06-06T13:30:00+00:00") from a hint ("7:00 PM IST = 13:30 UTC") they
+// had to compute themselves — one arithmetic slip here silently shifts every
+// reminder the whole cascade schedules off it. Pick IST directly instead; the
+// UTC conversion happens the same way SessionsTab's picker does it.
+function IstDateTimeField({ label, value, onChange, hint }: { label: string; value: string; onChange: (isoUtc: string) => void; hint?: string }) {
+  // Fully controlled off `value` — no local state/effect needed. The picker's
+  // displayed value is always derived straight from the stored UTC instant,
+  // and every change computes the new UTC instant and hands it straight back
+  // up; there's nothing here for a sync effect to mirror.
+  return (
+    <div>
+      <label className="block text-xs font-semibold mb-1 text-slate-600 uppercase tracking-wide">{label}</label>
+      <input
+        type="datetime-local"
+        value={toIstPickerValue(value)}
+        onChange={e => {
+          const { iso } = fromIstPicker(e.target.value);
+          if (iso) onChange(iso);
+        }}
+        className="w-full border border-slate-300 rounded-lg px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-[#00DF83]/50 focus:border-[#00DF83] bg-white"
+      />
+      <p className="text-[11px] text-slate-400 mt-1">
+        {hint} Pick the date &amp; time in IST — no conversion needed.
+        {value && <> Currently: <span className="font-semibold text-slate-600">{formatIst(value)}</span>.</>}
+      </p>
     </div>
   );
 }
