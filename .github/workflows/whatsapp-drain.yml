@@ -1,13 +1,20 @@
-name: WhatsApp queue drain
+name: WhatsApp queue drain (manual fallback)
 
-# Vercel Hobby crons only run ~once/day, which is too slow to drain the WhatsApp
-# send queue. This free GitHub Actions schedule pings the drain endpoint every
-# ~5 minutes instead, so queued broadcasts finish promptly. (On Vercel Pro you
-# can rely on vercel.json's cron and disable this workflow.)
+# This used to be the PRIMARY driver of the WhatsApp queue, pinging the drain
+# endpoint every ~5 minutes because the Vercel project lived under a team on
+# the Hobby plan — which silently throttles/never-registers vercel.json's
+# crons (confirmed via Settings -> Cron Jobs showing nothing, despite the
+# project owner's own personal account being on Pro the whole time; Vercel
+# billing/limits are scoped to the TEAM that owns the project, not the user).
+#
+# That team was upgraded to Pro on 2026-10-05 and Cron Jobs now lists all
+# three jobs from vercel.json (process-whatsapp-queue, process-email-queue,
+# score-unscored) at their real */5 and */10 schedules. Vercel's own cron is
+# the primary mechanism again. The `schedule:` trigger below is intentionally
+# removed rather than the whole file deleted: if Vercel's cron ever needs a
+# manual nudge, this stays as a one-click fallback from the Actions tab.
 on:
-  schedule:
-    - cron: '*/5 * * * *'   # every 5 minutes (GitHub may delay under load)
-  workflow_dispatch: {}      # allows a manual run from the Actions tab
+  workflow_dispatch: {}
 
 jobs:
   drain:
@@ -20,4 +27,4 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             -H "Content-Type: application/json" \
             -w '\nHTTP %{http_code}\n' \
-          || echo "drain request failed (will retry next tick)"
+          || echo "drain request failed"
