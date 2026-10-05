@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import EmailBuilder from "./EmailBuilder";
+import { formatIst } from "@/lib/ist";
 
 type Audience = "verified" | "unverified" | "all";
 
@@ -615,7 +616,7 @@ function CampaignStatsPanel({ campaign }: { campaign: Campaign }) {
           </div>
           {queue.nextScheduledFor && (
             <p className="text-[11px] text-slate-400 mt-3 text-center">
-              Next delivery: {new Date(queue.nextScheduledFor).toLocaleString()}
+              Next delivery: {formatIst(queue.nextScheduledFor)}
             </p>
           )}
         </div>

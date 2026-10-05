@@ -2,22 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Loader2, Plus, X, Check, Square, Power, Copy, Trash2, ShieldCheck, ShieldOff } from "lucide-react";
+import { fromIstPicker } from "@/lib/ist";
 
 type SessionStatus = "upcoming" | "active" | "completed";
-
-// Converts a datetime-local value (entered as IST wall-clock) into the UTC ISO
-// string the countdown needs, plus human date/time labels in IST. The admin
-// just picks "21 June 2026, 7:00 PM" and we compute 2026-06-21T13:30:00Z etc.
-function fromIstPicker(local: string): { iso: string; dateLabel: string; timeLabel: string } {
-  if (!local) return { iso: "", dateLabel: "", timeLabel: "" };
-  const d = new Date(`${local}:00+05:30`); // interpret the picked time as IST
-  if (isNaN(d.getTime())) return { iso: "", dateLabel: "", timeLabel: "" };
-  const ist = (opts: Intl.DateTimeFormatOptions) =>
-    new Intl.DateTimeFormat("en-GB", { ...opts, timeZone: "Asia/Kolkata" }).format(d);
-  const dateLabel = `${ist({ weekday: "short" })}, ${ist({ day: "numeric" })} ${ist({ month: "long" })} ${ist({ year: "numeric" })}`;
-  const timeLabel = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" }).format(d) + " IST";
-  return { iso: d.toISOString(), dateLabel, timeLabel };
-}
 
 // Blank create-form defaults, shared between "New session" and post-create reset.
 const BLANK_FORM = {
@@ -469,7 +456,9 @@ export default function SessionsTab() {
                 />
                 <p className="text-[10px] text-slate-400 mt-1">
                   Just pick the date &amp; time in IST. We auto-fill the date/time labels and the countdown.
-                  {form.datetimeUtc && <> Countdown (UTC): <span className="font-mono text-slate-500">{form.datetimeUtc}</span></>}
+                  {form.datetimeUtc && (
+                    <> Confirmed: <span className="font-semibold text-slate-600">{form.dateLabel} · {form.timeLabel}</span> — every reminder (T-3d / T-1d / T-1h) is timed off this.</>
+                  )}
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-3">

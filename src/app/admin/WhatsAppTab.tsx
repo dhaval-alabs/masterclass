@@ -9,6 +9,7 @@ import {
   CalendarClock, Clock,
 } from "lucide-react";
 import WhatsAppProfilePanel from "./WhatsAppProfilePanel";
+import { formatIst } from "@/lib/ist";
 
 type Audience = "verified" | "unverified" | "all";
 
@@ -1499,11 +1500,11 @@ export default function WhatsAppTab() {
                       <span className="tabular-nums text-slate-600 font-semibold">
                         {c.sentCount.toLocaleString()}/{c.totalRecipients.toLocaleString()} <span className="font-normal text-slate-400">sent</span>
                       </span>
-                      {c.sentAt && <><span className="text-slate-400">·</span><span className="text-slate-400">{new Date(c.sentAt).toLocaleDateString()}</span></>}
+                      {c.sentAt && <><span className="text-slate-400">·</span><span className="text-slate-400">{formatIst(c.sentAt, { dateStyle: "medium" })}</span></>}
                       {c.status === "scheduled" && c.scheduledFor && (
                         <><span className="text-slate-400">·</span>
                           <span className="flex items-center gap-1 text-violet-700 font-semibold">
-                            <Clock className="w-3 h-3" /> Sends {new Date(c.scheduledFor).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}
+                            <Clock className="w-3 h-3" /> Sends {formatIst(c.scheduledFor)}
                           </span></>
                       )}
                     </div>
@@ -1825,7 +1826,7 @@ export default function WhatsAppTab() {
                             <p><span className="font-semibold">Template:</span> <code className="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-[11px]">{c.templateName}</code></p>
                             <p><span className="font-semibold">Language:</span> {c.languageCode}</p>
                             <p><span className="font-semibold">Variables:</span> {c.variables.length > 0 ? c.variables.map((v, i) => `{{${i+1}}}=${v}`).join(", ") : "none"}</p>
-                            {c.sentAt && <p><span className="font-semibold">Sent at:</span> {new Date(c.sentAt).toLocaleString()}</p>}
+                            {c.sentAt && <p><span className="font-semibold">Sent at:</span> {formatIst(c.sentAt)}</p>}
                           </div>
                         </div>
                       )}
