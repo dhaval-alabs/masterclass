@@ -10,6 +10,7 @@ import {
   bulkCreateWhatsAppSendLog,
   type WaSendLogEntry,
 } from '@/lib/db';
+import { effectiveDailyLimit } from '@/lib/wa-limits';
 
 // Graph API version. v17 was EOL'd in mid-2025; v22 is the current LTS.
 // Centralize so we can bump everywhere with one edit.
@@ -315,7 +316,7 @@ export async function sendWhatsAppCampaign(params: {
   //    THIS send to the remaining headroom so we never overshoot the tier; the
   //    overflow is recorded as 'skipped' (not failed) and is reachable the next
   //    day via "Send to new" once the daily count resets.
-  const dailyLimit = parseInt(process.env.WA_DAILY_LIMIT ?? '900', 10);
+  const dailyLimit = await effectiveDailyLimit();
   const dailySentSoFar = await getWhatsAppDailySentCount();
   const headroom = Math.max(0, dailyLimit - dailySentSoFar);
 

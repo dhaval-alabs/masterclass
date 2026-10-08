@@ -7,7 +7,7 @@ import { cookies } from 'next/headers';
 import { verifyAdminSession } from '@/lib/auth';
 import { runBroadcast, audienceSpecFor, BroadcastError, type BroadcastInput, type Audience } from '@/lib/broadcast';
 import { getActiveWebinarSession, resolveAudience, MigrationRequiredError, type AudienceScope } from '@/lib/db';
-import { automationReserve, whatsAppDailyLimit } from '@/lib/whatsapp-campaign';
+import { dailyLimitInfo, automationReserve, dayStartLabel } from '@/lib/wa-limits';
 
 // Admin-session authed (the BROADCAST_API_KEY is for server-to-server callers
 // and never reaches the browser). This route lets the admin UI drive the same
@@ -18,7 +18,7 @@ async function requireAdmin(): Promise<boolean> {
 }
 
 // GET /api/admin/broadcast?channel=&audience=&scope=&exclude=
-//   → { count, sessionCode, whatsapp?: { dailyLimit, broadcastPerDay, estimatedDays } }
+//   → { count, sessionCode, whatsapp?: { dailyLimit, appLimit, metaLimit, broadcastPerDay, estimatedDays, resumesAt, … } }
 // Lets the UI show "this will send to N people" — and, for a WhatsApp send
 // bigger than one day's cap, how long the queue will take to reach them all —
 // before the admin commits.
@@ -38,11 +38,18 @@ export async function GET(req: NextRequest) {
     const { spec } = audienceSpecFor({ audience, scope, excludeCurrentRegistrants: exclude }, session?.id ?? null);
     const count = (await resolveAudience(spec, channel)).length;
 
-    let whatsapp: { dailyLimit: number; broadcastPerDay: number; estimatedDays: number } | undefined;
+    let whatsapp: {
+      dailyLimit: number; appLimit: number; metaLimit: number | null; metaTier: string | null;
+      constrainedBy: 'app' | 'meta'; broadcastPerDay: number; estimatedDays: number; resumesAt: string;
+    } | undefined;
     if (channel === 'whatsapp') {
-      const dailyLimit = whatsAppDailyLimit();
-      const broadcastPerDay = Math.max(1, dailyLimit - automationReserve(dailyLimit));
-      whatsapp = { dailyLimit, broadcastPerDay, estimatedDays: Math.ceil(count / broadcastPerDay) };
+      const info = await dailyLimitInfo();
+      const broadcastPerDay = Math.max(1, info.limit - automationReserve(info.limit));
+      whatsapp = {
+        dailyLimit: info.limit, appLimit: info.appLimit, metaLimit: info.metaLimit, metaTier: info.metaTier,
+        constrainedBy: info.constrainedBy, broadcastPerDay,
+        estimatedDays: Math.ceil(count / broadcastPerDay), resumesAt: dayStartLabel(),
+      };
     }
     return NextResponse.json({ count, sessionCode: session?.code ?? null, whatsapp });
   } catch (err) {

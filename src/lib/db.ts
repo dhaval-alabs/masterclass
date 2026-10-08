@@ -1,4 +1,5 @@
 import { getServiceClient } from './supabase';
+import { waDayStart, effectiveDailyLimit } from './wa-limits';
 
 export interface SpeakerSettings {
   speakerName: string;
@@ -4239,7 +4240,7 @@ export async function getAnalyticsOverview(sessionId?: string | null): Promise<A
     .select('*', { count: 'exact', head: true });
 
   const dailySent = await getWhatsAppDailySentCount();
-  const limit = parseInt(process.env.WA_DAILY_LIMIT ?? '900', 10);
+  const limit = await effectiveDailyLimit();
 
   return {
     email: {
@@ -4446,12 +4447,13 @@ export async function getFailedWhatsAppRecipients(
   return all.filter(r => r.phone?.trim() && failedPhones.has(norm(r.phone)));
 }
 
-// Count of UNIQUE phones successfully sent today (UTC). Deduped by phone so that
+// Count of UNIQUE phones successfully sent in the current sending day (from 09:00 IST). Deduped by phone so that
 // retries / "send to new" don't inflate the daily total — this mirrors WhatsApp's
 // own per-day UNIQUE-recipient messaging limit.
 export async function getWhatsAppDailySentCount(): Promise<number> {
-  const todayUtcMidnight = new Date();
-  todayUtcMidnight.setUTCHours(0, 0, 0, 0);
+  // The sending day starts at 09:00 IST (see wa-limits.ts), not midnight UTC —
+  // so a broadcast's leftovers resume at a sane hour instead of 05:30 IST.
+  const dayStart = waDayStart();
   // Paged — the cap check itself must not undercount once a day passes 1,000
   // sends (any WA_DAILY_LIMIT above 1,000 would otherwise never trip).
   const data = await fetchAllRows<{ phone: string }>(() => client()
@@ -4459,7 +4461,7 @@ export async function getWhatsAppDailySentCount(): Promise<number> {
     .from('whatsapp_send_log')
     .select('phone')
     .in('status', ['sent', 'delivered', 'read'])
-    .gte('sent_at', todayUtcMidnight.toISOString())
+    .gte('sent_at', dayStart.toISOString())
     .order('id', { ascending: true }));
   const uniq = new Set(data.map(r => phoneKey(r.phone)));
   return uniq.size;
