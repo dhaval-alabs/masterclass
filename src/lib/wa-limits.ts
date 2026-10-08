@@ -6,13 +6,12 @@
 // and the actual sending disagree.
 //
 // Two ceilings apply, and the lower one wins:
-//   1. Our own limit — WA_DAILY_LIMIT, default 3,000.
+//   1. Our own limit — WA_DAILY_LIMIT, default 2,000 (matching Meta's tier on
+//      2026-10-08; raise it deliberately if Meta raises the tier).
 //   2. Meta's messaging tier for the broadcast number — the most UNIQUE people
 //      it may start conversations with per rolling 24h. Read live from Meta.
-//      On 2026-10-08 that was TIER_2K: a flat 3,000 would have sent ~1,000 a
-//      day straight into Meta's wall. Meta raises the tier automatically as a
-//      number keeps using it with good quality; when it does, the higher of our
-//      limit takes effect here with no change.
+//      A safety net: if our limit is ever set above the tier, or Meta's tier
+//      drops, sends stop at what Meta will actually accept instead of failing.
 //
 // The "day" starts at 09:00 IST, not midnight UTC. Whatever a day's limit
 // doesn't cover stays queued and resumes at 09:00 IST — previously "next day"
@@ -26,8 +25,8 @@ const IST_OFFSET_MIN = 5 * 60 + 30;
 
 /** Our own daily ceiling, before Meta's tier is applied. */
 export function appDailyLimit(): number {
-  const n = parseInt(process.env.WA_DAILY_LIMIT ?? '3000', 10);
-  return Number.isFinite(n) && n > 0 ? n : 3000;
+  const n = parseInt(process.env.WA_DAILY_LIMIT ?? '2000', 10);
+  return Number.isFinite(n) && n > 0 ? n : 2000;
 }
 
 /** IST hour at which the daily window resets (default 9 → 09:00 IST). */
