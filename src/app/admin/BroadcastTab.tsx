@@ -10,7 +10,10 @@ type Audience = "all" | "verified" | "unverified";
 type Scope = "session" | "all_sessions";
 interface PreviewInfo {
   sessionCode: string | null;
-  whatsapp?: { dailyLimit: number; broadcastPerDay: number; estimatedDays: number };
+  whatsapp?: {
+    dailyLimit: number; appLimit: number; metaLimit: number | null; metaTier: string | null;
+    constrainedBy: "app" | "meta"; broadcastPerDay: number; estimatedDays: number; resumesAt: string;
+  };
 }
 
 interface WaTemplateButton { type: string; text: string }
@@ -360,7 +363,13 @@ export default function BroadcastTab() {
             {/* A WhatsApp send bigger than one day's cap drains over several days. */}
             {channel === "whatsapp" && previewInfo?.whatsapp && previewCount !== null && previewInfo.whatsapp.estimatedDays > 1 && (
               <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                WhatsApp broadcasts go out at up to <span className="font-semibold">{previewInfo.whatsapp.broadcastPerDay.toLocaleString()}/day</span> (daily cap {previewInfo.whatsapp.dailyLimit.toLocaleString()}, the rest kept free so OTP nudges, welcomes and reminders keep working). This one reaches everyone in about <span className="font-semibold">{previewInfo.whatsapp.estimatedDays} days</span> — the queue continues automatically, no need to resend.
+                WhatsApp broadcasts go out at up to <span className="font-semibold">{previewInfo.whatsapp.broadcastPerDay.toLocaleString()} a day</span> (daily limit {previewInfo.whatsapp.dailyLimit.toLocaleString()}, with the rest kept free so OTP nudges, welcomes and reminders keep working).
+                {" "}This one reaches everyone in about <span className="font-semibold">{previewInfo.whatsapp.estimatedDays} days</span>: when a day&apos;s share is used, the rest waits and continues automatically at <span className="font-semibold">{previewInfo.whatsapp.resumesAt}</span> the next day — no need to resend.
+                {previewInfo.whatsapp.constrainedBy === "meta" && previewInfo.whatsapp.metaLimit !== null && (
+                  <span className="block mt-1 text-amber-700">
+                    Your limit is {previewInfo.whatsapp.appLimit.toLocaleString()}, but Meta currently lets this number reach {previewInfo.whatsapp.metaLimit.toLocaleString()} new people a day ({previewInfo.whatsapp.metaTier}). That rises automatically as Meta raises the tier.
+                  </span>
+                )}
               </p>
             )}
           </div>

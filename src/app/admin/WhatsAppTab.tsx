@@ -181,7 +181,17 @@ const LANGUAGE_OPTIONS = [
   { value: "hi",    label: "Hindi" },
 ];
 
-const DAILY_LIMIT = Number(process.env.NEXT_PUBLIC_WA_DAILY_LIMIT ?? 900);
+// The daily limit comes from the server (lib/wa-limits.ts) — the lower of our
+// WA_DAILY_LIMIT and Meta's live messaging tier. This screen used to read its
+// own public env var, which could disagree with what was actually enforced.
+interface DailyLimitState {
+  limit: number;
+  appLimit: number;
+  metaLimit: number | null;
+  metaTier: string | null;
+  constrainedBy: "app" | "meta";
+  resetsAt: string;
+}
 
 // Reads a response as JSON, but degrades gracefully when the server returns a
 // non-JSON body (e.g. a Vercel "An error occurred…" timeout page) instead of
@@ -524,6 +534,7 @@ export default function WhatsAppTab() {
 
   // Daily limit
   const [dailyCount, setDailyCount] = useState<number | null>(null);
+  const [dailyLimit, setDailyLimit] = useState<DailyLimitState | null>(null);
 
   // Opt-out management
   const [optouts, setOptouts]             = useState<WaOptout[]>([]);
@@ -635,6 +646,12 @@ export default function WhatsAppTab() {
       if (res.ok) {
         const data = await readJson(res);
         setDailyCount(data.dailySentCount ?? null);
+        if (typeof data.dailyLimit === "number") {
+          setDailyLimit({
+            limit: data.dailyLimit, appLimit: data.appLimit, metaLimit: data.metaLimit ?? null,
+            metaTier: data.metaTier ?? null, constrainedBy: data.constrainedBy, resetsAt: data.resetsAt,
+          });
+        }
       }
     } catch { /* ignore */ }
   }, []);
@@ -1368,25 +1385,37 @@ export default function WhatsAppTab() {
           </div>
 
           {/* Daily limit */}
-          <div className="bg-white border border-slate-200 rounded-xl p-4">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-bold text-slate-600">Daily send limit</p>
-              <p className="text-[11px] text-slate-400">Resets midnight UTC</p>
-            </div>
-            <div className="flex items-end gap-1.5 mb-2">
-              <span className="text-2xl font-extrabold text-[#003368] tabular-nums">{dailyCount ?? "—"}</span>
-              <span className="text-sm text-slate-400 mb-0.5">/ {DAILY_LIMIT}</span>
-            </div>
-            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-              <div
-                className={`h-1.5 rounded-full transition-all ${(dailyCount ?? 0) >= DAILY_LIMIT ? "bg-red-400" : (dailyCount ?? 0) > DAILY_LIMIT * 0.8 ? "bg-amber-400" : "bg-[#25D366]"}`}
-                style={{ width: `${Math.min(100, ((dailyCount ?? 0) / DAILY_LIMIT) * 100)}%` }}
-              />
-            </div>
-            {(dailyCount ?? 0) >= DAILY_LIMIT && (
-              <p className="text-[11px] text-red-600 font-semibold mt-1.5">Daily limit reached — sending is blocked until midnight UTC.</p>
-            )}
-          </div>
+          {(() => {
+            const limit = dailyLimit?.limit ?? null;
+            const used = dailyCount ?? 0;
+            const resets = dailyLimit?.resetsAt ?? "9:00 AM IST";
+            return (
+              <div className="bg-white border border-slate-200 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-bold text-slate-600">Daily send limit</p>
+                  <p className="text-[11px] text-slate-400">Resets {resets}</p>
+                </div>
+                <div className="flex items-end gap-1.5 mb-2">
+                  <span className="text-2xl font-extrabold text-[#003368] tabular-nums">{dailyCount?.toLocaleString() ?? "—"}</span>
+                  <span className="text-sm text-slate-400 mb-0.5">/ {limit?.toLocaleString() ?? "—"}</span>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className={`h-1.5 rounded-full transition-all ${limit !== null && used >= limit ? "bg-red-400" : limit !== null && used > limit * 0.8 ? "bg-amber-400" : "bg-[#25D366]"}`}
+                    style={{ width: `${limit ? Math.min(100, (used / limit) * 100) : 0}%` }}
+                  />
+                </div>
+                {dailyLimit?.constrainedBy === "meta" && dailyLimit.metaLimit !== null && (
+                  <p className="text-[11px] text-slate-500 mt-1.5">
+                    Your limit is {dailyLimit.appLimit.toLocaleString()}, but Meta currently allows this number {dailyLimit.metaLimit.toLocaleString()} new people a day ({dailyLimit.metaTier}). It rises automatically as Meta raises the tier.
+                  </p>
+                )}
+                {limit !== null && used >= limit && (
+                  <p className="text-[11px] text-amber-700 font-semibold mt-1.5">Today&apos;s limit is reached — anything still queued continues automatically at {resets}.</p>
+                )}
+              </div>
+            );
+          })()}
 
           {/* WA status */}
           <div className="bg-[#25D366]/10 border border-[#25D366]/30 rounded-xl p-4">
