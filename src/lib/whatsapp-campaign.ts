@@ -1,5 +1,6 @@
 import {
-  getEmailRecipients,
+  resolveAudience,
+  campaignAudienceSpec,
   getActiveWebinarSession,
   getWhatsAppCampaignById,
   updateWhatsAppCampaign,
@@ -27,6 +28,22 @@ import { findTemplateSendProblem } from './wa-template-spec';
 const CHUNK = Math.max(1, parseInt(process.env.WA_SEND_CHUNK ?? '80', 10));
 const INLINE_CHUNK = CHUNK; // attempted within the request that triggered the send
 const CRON_CHUNK   = CHUNK; // attempted per campaign per cron tick
+
+// The daily cap is shared by bulk campaigns and per-person automations (OTP
+// nudge, welcome, T-3d/T-1d/T-1h reminders). A broadcast several times the cap
+// would otherwise take the WHOLE allowance every day it drains — and the
+// automations for the very masterclass it's promoting would get nothing for a
+// week. Bulk drains leave this slice for automations; WA_AUTOMATION_RESERVE
+// overrides the default of 20% of the cap.
+export function automationReserve(dailyLimit: number): number {
+  const raw = process.env.WA_AUTOMATION_RESERVE;
+  const n = raw !== undefined && raw.trim() !== '' ? parseInt(raw, 10) : Math.round(dailyLimit * 0.2);
+  return Number.isFinite(n) ? Math.min(Math.max(0, n), dailyLimit) : 0;
+}
+
+export function whatsAppDailyLimit(): number {
+  return parseInt(process.env.WA_DAILY_LIMIT ?? '900', 10);
+}
 
 export interface DrainResult {
   processedNow: number;
@@ -65,11 +82,12 @@ export async function drainWhatsAppCampaignQueue(
   }
   const headerImageUrl = opts.headerImageUrl ?? campaign.headerImageUrl;
 
-  // Only claim up to the remaining daily headroom — overflow stays pending and
-  // auto-resumes on a later tick once the daily count resets.
-  const dailyLimit = parseInt(process.env.WA_DAILY_LIMIT ?? '900', 10);
+  // Only claim up to the remaining BULK headroom — the daily cap minus the slice
+  // reserved for automations. Overflow stays pending and auto-resumes on a
+  // later tick once the daily count resets.
+  const dailyLimit = whatsAppDailyLimit();
   const sentToday  = await getWhatsAppDailySentCount();
-  const headroom   = Math.max(0, dailyLimit - sentToday);
+  const headroom   = Math.max(0, dailyLimit - automationReserve(dailyLimit) - sentToday);
   const claimCount = Math.min(maxToSend, headroom);
 
   let sentNow = 0;
@@ -138,7 +156,7 @@ export async function drainWhatsAppCampaignQueue(
   let errorSummary: string | null | undefined;
   if (queuedRemaining > 0) {
     errorSummary = headroom <= 0
-      ? `Daily limit (${dailyLimit}) reached — ${queuedRemaining} queued, resuming automatically after it resets.`
+      ? `Today's broadcast share of the daily limit (${dailyLimit - automationReserve(dailyLimit)} of ${dailyLimit}; the rest is kept for automations) is used — ${queuedRemaining} queued, resuming automatically after it resets.`
       : `${queuedRemaining} queued — sending in the background.`;
   } else {
     errorSummary = counts.failed > 0
@@ -240,9 +258,10 @@ export async function fireWhatsAppCampaign(campaign: WhatsAppCampaign): Promise<
     return { status: 'draft', sentCount: 0, failedCount: 0, totalRecipients: 0, message: 'Broadcast credentials not configured — reverted to draft.' };
   }
 
+  // Recomputed at fire time — for a cross-session campaign, from every past
+  // registrant, not just the active session's (see campaignAudienceSpec).
   const session = await getActiveWebinarSession();
-  const all = await getEmailRecipients(campaign.audience, session?.id ?? null);
-  const recipients = all.filter(r => r.phone?.trim());
+  const recipients = await resolveAudience(campaignAudienceSpec(campaign, session?.id ?? null), 'whatsapp');
 
   // Clear the schedule so the cron's scheduled-pass doesn't re-fire it.
   await updateWhatsAppCampaign(campaign.id, { scheduledFor: null });
@@ -324,25 +343,34 @@ export async function drainWhatsAppAutoSends(maxItems = 150): Promise<{ sent: nu
       continue;
     }
 
+    // Only hand over what today's cap can actually take. sendWhatsAppCampaign
+    // defers anything past the cap as "skipped" — and the old code then marked
+    // those rows 'sent', so an automation starved by the daily limit looked
+    // delivered. Past-cap rows now simply stay pending for the next tick.
+    const headroom = Math.max(0, whatsAppDailyLimit() - await getWhatsAppDailySentCount());
+    if (headroom === 0) { skipped += toSend.length; continue; }
+    const batch = toSend.slice(0, headroom);
+    skipped += toSend.length - batch.length;
+
     try {
       const result = await sendWhatsAppCampaign({
         campaignId: campaign.id,
         templateName: campaign.templateName,
         languageCode: campaign.languageCode,
         variables: campaign.variables,
-        recipients: toSend.map(d => ({ phone: d.phone, fullName: d.recipientName })),
+        recipients: batch.map(d => ({ phone: d.phone, fullName: d.recipientName })),
         headerImageUrl: campaign.headerImageUrl,
       });
       // Don't report a send that Meta rejected as 'sent' — when nothing landed,
       // record why, so a broken automation is visible instead of looking healthy.
       if (result.sentCount === 0 && result.failedCount > 0) {
         const reason = result.errors[0] ?? 'Meta rejected every message';
-        for (const d of toSend) { await markScheduledWhatsAppSend(d.id, 'failed', reason); failed++; }
+        for (const d of batch) { await markScheduledWhatsAppSend(d.id, 'failed', reason); failed++; }
       } else {
-        for (const d of toSend) { await markScheduledWhatsAppSend(d.id, 'sent'); sent++; }
+        for (const d of batch) { await markScheduledWhatsAppSend(d.id, 'sent'); sent++; }
       }
     } catch (err) {
-      for (const d of toSend) { await markScheduledWhatsAppSend(d.id, 'failed', String(err)); failed++; }
+      for (const d of batch) { await markScheduledWhatsAppSend(d.id, 'failed', String(err)); failed++; }
     }
   }
 

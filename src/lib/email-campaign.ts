@@ -5,7 +5,8 @@
 // the transport and stays free of it.
 
 import {
-  getEmailRecipients,
+  resolveAudience,
+  campaignAudienceSpec,
   updateEmailCampaign,
   getActiveWebinarSession,
   type EmailCampaign,
@@ -24,7 +25,8 @@ export async function fireEmailCampaign(campaign: EmailCampaign): Promise<FireEm
   // Scope to the campaign's own session when it has one, so a broadcast
   // scheduled for a past cohort does not silently pick up the current one.
   const sessionId = campaign.sessionId ?? (await getActiveWebinarSession())?.id ?? null;
-  const recipients = await getEmailRecipients(campaign.audience, sessionId);
+  // A cross-session broadcast draws from every past registrant instead.
+  const recipients = await resolveAudience(campaignAudienceSpec(campaign, sessionId), 'email');
 
   if (recipients.length === 0) {
     // Nothing to send is not a failure, but it must not stay 'scheduled' or the

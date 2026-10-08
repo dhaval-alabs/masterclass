@@ -14,7 +14,8 @@
 
 import {
   getActiveWebinarSession,
-  getEmailRecipients,
+  resolveAudience,
+  campaignAudienceSpec,
   createWhatsAppCampaign,
   getWhatsAppCampaignById,
   createEmailCampaign,
@@ -22,6 +23,8 @@ import {
   updateEmailCampaign,
   type WhatsAppCampaign,
   type EmailCampaign,
+  type AudienceScope,
+  type AudienceSpec,
 } from './db';
 import { startCampaignSend, fireWhatsAppCampaign } from './whatsapp-campaign';
 import { sendCampaignEmails } from './email';
@@ -39,6 +42,12 @@ export interface BroadcastInput {
 
   // mode = 'audience'
   audience?: Audience;
+  // 'session' (default) = the active masterclass's registrants.
+  // 'all_sessions' = everyone who ever registered for any masterclass.
+  scope?: AudienceScope;
+  // With scope 'all_sessions': skip anyone already registered for the active
+  // masterclass (the one being promoted). Defaults to true for that scope.
+  excludeCurrentRegistrants?: boolean;
 
   // mode = 'recipients'
   recipients?: Array<{ phone?: string; email?: string; name?: string }>;
@@ -86,6 +95,26 @@ function assert(cond: unknown, message: string): asserts cond {
   if (!cond) throw new BroadcastError(message);
 }
 
+const VALID_SCOPES: AudienceScope[] = ['session', 'all_sessions'];
+
+/** The audience spec for an audience-mode request, plus what to persist on the campaign. */
+export function audienceSpecFor(input: Pick<BroadcastInput, 'audience' | 'scope' | 'excludeCurrentRegistrants'>, activeSessionId: string | null): {
+  spec: AudienceSpec; scope: AudienceScope; excludeSessionRegistrants: boolean;
+} {
+  const scope = input.scope ?? 'session';
+  assert(VALID_SCOPES.includes(scope), `scope must be one of ${VALID_SCOPES.join(', ')}.`);
+  const audience = input.audience!;
+  if (scope === 'session') {
+    return { spec: { audience, scope, sessionId: activeSessionId }, scope, excludeSessionRegistrants: false };
+  }
+  const exclude = input.excludeCurrentRegistrants ?? true;
+  return {
+    spec: { audience, scope, sessionId: null, excludeSessionId: exclude ? activeSessionId : null },
+    scope,
+    excludeSessionRegistrants: exclude,
+  };
+}
+
 // ───────────────────────────── WhatsApp ─────────────────────────────
 
 async function runWhatsApp(input: BroadcastInput): Promise<BroadcastResult> {
@@ -113,12 +142,17 @@ async function runWhatsApp(input: BroadcastInput): Promise<BroadcastResult> {
   // ── Resolve recipients ──
   let recipients: { phone: string; fullName: string }[];
   let audience: Audience;
+  let scope: AudienceScope = 'session';
+  let excludeSessionRegistrants = false;
 
   if (input.mode === 'audience') {
     assert(input.audience && VALID_AUDIENCES.includes(input.audience), `audience must be one of ${VALID_AUDIENCES.join(', ')}.`);
     audience = input.audience!;
-    const all = await getEmailRecipients(audience, sessionId);
-    recipients = all.filter(r => r.phone?.trim()).map(r => ({ phone: r.phone, fullName: r.fullName }));
+    const resolved = audienceSpecFor(input, sessionId);
+    scope = resolved.scope;
+    excludeSessionRegistrants = resolved.excludeSessionRegistrants;
+    const all = await resolveAudience(resolved.spec, 'whatsapp');
+    recipients = all.map(r => ({ phone: r.phone, fullName: r.fullName }));
   } else {
     // mode = 'recipients'
     assert(Array.isArray(input.recipients) && input.recipients.length > 0, 'recipients must be a non-empty array.');
@@ -142,6 +176,7 @@ async function runWhatsApp(input: BroadcastInput): Promise<BroadcastResult> {
       sessionId, templateName: input.templateName!.trim(), languageCode, audience, variables,
       headerImageUrl: input.headerImageUrl ?? null, totalRecipients: recipients.length,
       status: 'scheduled', scheduledFor: when.toISOString(),
+      audienceScope: scope, excludeSessionRegistrants,
     });
     return {
       success: true, channel: 'whatsapp', mode: input.mode, campaignId: campaign.id,
@@ -154,6 +189,7 @@ async function runWhatsApp(input: BroadcastInput): Promise<BroadcastResult> {
   const campaign = await createWhatsAppCampaign({
     sessionId, templateName: input.templateName!.trim(), languageCode, audience, variables,
     headerImageUrl: input.headerImageUrl ?? null, totalRecipients: recipients.length, status: 'sending',
+    audienceScope: scope, excludeSessionRegistrants,
   });
   const r = await startCampaignSend(campaign, recipients, { totalMode: 'set', headerImageUrl: input.headerImageUrl ?? null });
   return {
@@ -175,8 +211,8 @@ async function runEmail(input: BroadcastInput): Promise<BroadcastResult> {
     assert(input.campaignId, 'campaignId is required for mode "campaign".');
     const campaign = await getEmailCampaignById(input.campaignId!);
     assert(campaign, `Email campaign ${input.campaignId} not found.`);
-    const all = await getEmailRecipients(campaign!.audience, sessionId);
-    const recipients = all.filter(r => r.email?.trim()).map(r => ({ email: r.email, fullName: r.fullName }));
+    const all = await resolveAudience(campaignAudienceSpec(campaign!, sessionId), 'email');
+    const recipients = all.map(r => ({ email: r.email, fullName: r.fullName }));
     return sendEmailAndFinalize(campaign!, recipients);
   }
 
@@ -187,12 +223,17 @@ async function runEmail(input: BroadcastInput): Promise<BroadcastResult> {
   // ── Resolve recipients ──
   let recipients: { email: string; fullName: string }[];
   let audience: Audience;
+  let scope: AudienceScope = 'session';
+  let excludeSessionRegistrants = false;
 
   if (input.mode === 'audience') {
     assert(input.audience && VALID_AUDIENCES.includes(input.audience), `audience must be one of ${VALID_AUDIENCES.join(', ')}.`);
     audience = input.audience!;
-    const all = await getEmailRecipients(audience, sessionId);
-    recipients = all.filter(r => r.email?.trim()).map(r => ({ email: r.email, fullName: r.fullName }));
+    const resolved = audienceSpecFor(input, sessionId);
+    scope = resolved.scope;
+    excludeSessionRegistrants = resolved.excludeSessionRegistrants;
+    const all = await resolveAudience(resolved.spec, 'email');
+    recipients = all.map(r => ({ email: r.email, fullName: r.fullName }));
   } else {
     assert(Array.isArray(input.recipients) && input.recipients.length > 0, 'recipients must be a non-empty array.');
     audience = 'all';
@@ -210,6 +251,7 @@ async function runEmail(input: BroadcastInput): Promise<BroadcastResult> {
     sessionId, subject: input.subject!.trim(), bodyText: input.bodyText!.trim(),
     bodyHtml: input.bodyHtml ?? null, bannerUrl: input.bannerUrl ?? null,
     audience, totalRecipients: recipients.length, status: 'sending',
+    audienceScope: scope, excludeSessionRegistrants,
   });
   return sendEmailAndFinalize(campaign, recipients, input);
 }

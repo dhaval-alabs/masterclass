@@ -1,6 +1,6 @@
 export const maxDuration = 300; // inline chunk; the cron drains the rest
 import { NextRequest, NextResponse } from 'next/server';
-import { getWhatsAppCampaignById, getEmailRecipients, getActiveWebinarSession } from '@/lib/db';
+import { getWhatsAppCampaignById, getActiveWebinarSession, resolveAudience, campaignAudienceSpec } from '@/lib/db';
 import { startCampaignSend } from '@/lib/whatsapp-campaign';
 
 // POST /api/admin/whatsapp/campaigns/:id/retry — re-send to the WHOLE audience.
@@ -19,8 +19,9 @@ export async function POST(
     if (campaign.status === 'sent') return NextResponse.json({ error: 'Campaign already sent successfully' }, { status: 409 });
 
     const session = await getActiveWebinarSession();
-    const allRecipients = await getEmailRecipients(campaign.audience, session?.id ?? null);
-    const recipients = allRecipients.filter(r => r.phone?.trim());
+    // Same audience the campaign was sent to — every past registrant for a
+    // cross-session broadcast, not just the active session's.
+    const recipients = await resolveAudience(campaignAudienceSpec(campaign, session?.id ?? null), 'whatsapp');
 
     if (recipients.length === 0) {
       return NextResponse.json({ success: false, message: 'No recipients with phone numbers found.' });

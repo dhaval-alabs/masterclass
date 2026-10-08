@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getEmailCampaignById, getEmailRecipients, updateEmailCampaign, getActiveWebinarSession } from '@/lib/db';
+import {
+  getEmailCampaignById,
+  updateEmailCampaign,
+  getActiveWebinarSession,
+  resolveAudience,
+  campaignAudienceSpec,
+} from '@/lib/db';
 import { sendCampaignEmails } from '@/lib/email';
 
 // POST /api/admin/email/campaigns/:id/retry
@@ -20,7 +26,9 @@ export async function POST(
     await updateEmailCampaign(campaign.id, { status: 'sending' });
 
     const session = await getActiveWebinarSession();
-    const recipients = await getEmailRecipients(campaign.audience, session?.id ?? null);
+    // Same audience the campaign was sent to — every past registrant for a
+    // cross-session broadcast, not just the active session's.
+    const recipients = await resolveAudience(campaignAudienceSpec(campaign, session?.id ?? null), 'email');
 
     if (recipients.length === 0) {
       await updateEmailCampaign(campaign.id, { status: campaign.status });
