@@ -1,6 +1,6 @@
 export const maxDuration = 300; // inline chunk; the cron drains the rest
 import { NextRequest, NextResponse } from 'next/server';
-import { getWhatsAppCampaignById, getUnsentWhatsAppRegistrations, getActiveWebinarSession } from '@/lib/db';
+import { getWhatsAppCampaignById, getUnsentWhatsAppRegistrations, getActiveWebinarSession, campaignAudienceSpec } from '@/lib/db';
 import { startCampaignSend } from '@/lib/whatsapp-campaign';
 
 // POST /api/admin/whatsapp/campaigns/:id/send-new
@@ -20,7 +20,7 @@ export async function POST(
     if (campaign.status === 'sending') return NextResponse.json({ error: 'Campaign is already sending' }, { status: 409 });
 
     const session = await getActiveWebinarSession();
-    const newRecipients = await getUnsentWhatsAppRegistrations(campaign.id, campaign.audience, session?.id ?? null);
+    const newRecipients = await getUnsentWhatsAppRegistrations(campaign.id, campaignAudienceSpec(campaign, session?.id ?? null));
 
     if (newRecipients.length === 0) {
       return NextResponse.json({ success: true, sentCount: 0, message: 'No new recipients — everyone in this audience has already received this campaign.' });
@@ -45,7 +45,7 @@ export async function GET(
     if (!campaign) return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
 
     const session = await getActiveWebinarSession();
-    const newRecipients = await getUnsentWhatsAppRegistrations(campaign.id, campaign.audience, session?.id ?? null);
+    const newRecipients = await getUnsentWhatsAppRegistrations(campaign.id, campaignAudienceSpec(campaign, session?.id ?? null));
 
     return NextResponse.json({
       newCount: newRecipients.length,

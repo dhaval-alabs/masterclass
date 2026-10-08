@@ -73,6 +73,26 @@ function client() {
   return c;
 }
 
+// PostgREST on this project caps EVERY response at 1,000 rows (db-max-rows)
+// and does it silently — no error, no truncation flag, just a short array.
+// Measured: 6,323 registrations, an unbounded select returns exactly 1,000.
+// Any read that can grow past 1,000 rows has to page through with .range();
+// this is the one place that does it. `build` must return a FRESH query each
+// call (builders are single-use) with a stable ORDER BY, or pages can overlap
+// or skip rows.
+const PAGE_SIZE = 1000;
+type Pageable = { range(from: number, to: number): PromiseLike<{ data: unknown[] | null; error: unknown }> };
+async function fetchAllRows<T>(build: () => Pageable): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await build().range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as T[];
+    out.push(...rows);
+    if (rows.length < PAGE_SIZE) return out;
+  }
+}
+
 function shortId(): string {
   return Math.random().toString(36).slice(2, 11);
 }
@@ -2643,6 +2663,9 @@ export interface EmailCampaign {
   // Set when this is a one-off scheduled broadcast (migration 0034). The cron
   // fires it once scheduled_for passes; null for drafts and auto-sends.
   scheduledFor: string | null;
+  // Who the audience is drawn from (migration 0036) — see AudienceScope.
+  audienceScope: AudienceScope;
+  excludeSessionRegistrants: boolean;
 }
 
 export interface QueueItem {
@@ -2694,6 +2717,9 @@ function mapEmailCampaign(r: Record<string, unknown>): EmailCampaign {
     errorSummary: (r.error_summary as string | null) ?? null,
     createdAt: r.created_at as string,
     sentAt: (r.sent_at as string | null) ?? null,
+    // Absent before migration 0036 runs — every such campaign was session-scoped.
+    audienceScope: (r.audience_scope as AudienceScope | undefined) ?? 'session',
+    excludeSessionRegistrants: (r.exclude_session_registrants as boolean | undefined) ?? false,
   };
 }
 
@@ -2701,38 +2727,157 @@ export async function getEmailRecipients(
   audience: 'verified' | 'unverified' | 'all',
   sessionId?: string | null,
 ): Promise<EmailRecipient[]> {
-  const supabase = client();
-  let q = supabase
-    .schema('excel_to_ai')
-    .from('registrations')
-    .select('email, full_name, phone');
+  // Paged: an unbounded select silently stops at 1,000 rows (see fetchAllRows).
+  const data = await fetchAllRows<{ email: string; full_name: string; phone: string }>(() => {
+    let q = client()
+      .schema('excel_to_ai')
+      .from('registrations')
+      .select('email, full_name, phone')
+      .order('id', { ascending: true });
 
-  if (audience === 'verified') {
-    q = q.eq('status', 'Verified');
-  } else if (audience === 'unverified') {
-    q = q.neq('status', 'Verified');
-  }
+    if (audience === 'verified') {
+      q = q.eq('status', 'Verified');
+    } else if (audience === 'unverified') {
+      q = q.neq('status', 'Verified');
+    }
 
-  if (sessionId) {
-    // Strictly scoped to the session — matches the Registrations tab so the
-    // recipient count and the registrations count never disagree. (Legacy
-    // NULL-session rows were backfilled to their original session.)
-    q = q.eq('session_id', sessionId);
-  }
-
-  const { data, error } = await q;
-  if (error) throw error;
+    if (sessionId) {
+      // Strictly scoped to the session — matches the Registrations tab so the
+      // recipient count and the registrations count never disagree. (Legacy
+      // NULL-session rows were backfilled to their original session.)
+      q = q.eq('session_id', sessionId);
+    }
+    return q;
+  });
 
   // Dedupe by email (keep first occurrence)
   const seen = new Set<string>();
   const recipients: EmailRecipient[] = [];
-  for (const r of data ?? []) {
+  for (const r of data) {
     const email = (r.email as string)?.toLowerCase().trim();
     if (!email || seen.has(email)) continue;
     seen.add(email);
     recipients.push({ email: r.email as string, fullName: r.full_name as string, phone: r.phone as string });
   }
   return recipients;
+}
+
+// ── Audience scope ───────────────────────────────────────────────────────────
+//
+// 'session'      — the active session's registrants. What every campaign did
+//                  until migration 0036, and still the default.
+// 'all_sessions' — everyone who ever registered, for any masterclass. Built for
+//                  promoting a new masterclass to past registrants.
+
+export type AudienceScope = 'session' | 'all_sessions';
+type AudienceFilter = 'verified' | 'unverified' | 'all';
+
+export interface AudienceSpec {
+  audience: AudienceFilter;
+  scope: AudienceScope;
+  /** scope 'session': the session to draw from. */
+  sessionId: string | null;
+  /** scope 'all_sessions': drop anyone with ANY registration in this session. */
+  excludeSessionId?: string | null;
+}
+
+/** Legacy callers pass a bare filter + session id; scope-aware ones pass a spec. */
+export type AudienceInput = AudienceFilter | AudienceSpec;
+
+const phoneKey = (p: string | null | undefined) => (p || '').replace(/\D/g, '').slice(-10);
+const emailKey = (e: string | null | undefined) => (e || '').trim().toLowerCase();
+
+/**
+ * Resolves an audience to one recipient per PERSON for the given channel.
+ *
+ * Across sessions the same person usually has several rows — registered for
+ * W005 and W010, sometimes with a different email or phone each time — so
+ * identity has to follow the channel: a WhatsApp send dedupes on phone (two
+ * emails, one phone = one message), an email send dedupes on email. Deduping
+ * a WhatsApp audience by email, as getEmailRecipients does, would message the
+ * same phone twice.
+ *
+ * Status across sessions: "verified" = verified in ANY session (a warmer lead
+ * than someone who never finished OTP), "unverified" = never verified anywhere.
+ * Name/email/phone come from the person's most recent registration.
+ */
+export async function resolveAudience(spec: AudienceSpec, channel: 'whatsapp' | 'email'): Promise<EmailRecipient[]> {
+  if (spec.scope === 'session') {
+    const all = await getEmailRecipients(spec.audience, spec.sessionId);
+    return channel === 'whatsapp' ? all.filter(r => r.phone?.trim()) : all.filter(r => r.email?.trim());
+  }
+
+  const rows = await fetchAllRows<{
+    email: string | null; full_name: string | null; phone: string | null;
+    status: string | null; session_id: string | null; created_at: string;
+  }>(() => client()
+    .schema('excel_to_ai')
+    .from('registrations')
+    .select('email, full_name, phone, status, session_id, created_at')
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true }));
+
+  const keyOf = channel === 'whatsapp' ? (r: typeof rows[number]) => phoneKey(r.phone) : (r: typeof rows[number]) => emailKey(r.email);
+  const people = new Map<string, { latest: typeof rows[number]; everVerified: boolean; inExcluded: boolean }>();
+  for (const r of rows) {
+    const k = keyOf(r);
+    if (!k) continue;
+    const p = people.get(k) ?? { latest: r, everVerified: false, inExcluded: false };
+    p.latest = r;                                   // rows are ascending — last wins
+    if (r.status === 'Verified') p.everVerified = true;
+    if (spec.excludeSessionId && r.session_id === spec.excludeSessionId) p.inExcluded = true;
+    people.set(k, p);
+  }
+
+  const out: EmailRecipient[] = [];
+  for (const p of people.values()) {
+    if (p.inExcluded) continue;
+    if (spec.audience === 'verified' && !p.everVerified) continue;
+    if (spec.audience === 'unverified' && p.everVerified) continue;
+    out.push({ email: p.latest.email ?? '', fullName: p.latest.full_name ?? '', phone: p.latest.phone ?? '' });
+  }
+  return out;
+}
+
+/** Bridges legacy (filter, sessionId) callers and scope-aware specs. */
+async function recipientsFor(input: AudienceInput, sessionId: string | null | undefined, channel: 'whatsapp' | 'email'): Promise<EmailRecipient[]> {
+  if (typeof input === 'string') return getEmailRecipients(input, sessionId);
+  return resolveAudience(input, channel);
+}
+
+/**
+ * The spec a stored campaign's audience should be recomputed from — used when
+ * a scheduled send fires and on "Send to new" / "Retry". Session-scoped
+ * campaigns keep their historical behaviour of following the ACTIVE session;
+ * cross-session ones exclude registrants of the session they were created for
+ * (the masterclass being promoted), not whatever is active later.
+ */
+export function campaignAudienceSpec(
+  c: { audience: AudienceFilter; audienceScope: AudienceScope; excludeSessionRegistrants: boolean; sessionId: string | null },
+  activeSessionId: string | null,
+): AudienceSpec {
+  return c.audienceScope === 'all_sessions'
+    ? { audience: c.audience, scope: 'all_sessions', sessionId: null, excludeSessionId: c.excludeSessionRegistrants ? c.sessionId : null }
+    : { audience: c.audience, scope: 'session', sessionId: activeSessionId };
+}
+
+// Columns from migration 0036 are only written for cross-session campaigns, so
+// every existing flow keeps working even before the migration is applied.
+function scopeColumns(scope: AudienceScope | undefined, exclude: boolean | undefined): Record<string, unknown> {
+  if (scope !== 'all_sessions') return {};
+  return { audience_scope: 'all_sessions', exclude_session_registrants: exclude ?? false };
+}
+
+/** A required schema change hasn't been applied yet — the message says which. */
+export class MigrationRequiredError extends Error {}
+
+// PostgREST's "unknown column" error is cryptic; when it's ours, say what to do.
+function explainMissingScopeColumns(error: unknown): unknown {
+  const e = error as { code?: string; message?: string };
+  if (e?.code === 'PGRST204' && /audience_scope|exclude_session_registrants/.test(e.message ?? '')) {
+    return new MigrationRequiredError('Sending to all past registrants needs migration 0036_broadcast_audience_scope.sql — run it in the Supabase SQL Editor, then try again.');
+  }
+  return error;
 }
 
 export async function createEmailCampaign(params: {
@@ -2752,11 +2897,14 @@ export async function createEmailCampaign(params: {
   failedCount?: number;
   errorSummary?: string | null;
   sentAt?: string | null;
+  audienceScope?: AudienceScope;
+  excludeSessionRegistrants?: boolean;
 }): Promise<EmailCampaign> {
   const { data, error } = await client()
     .schema('excel_to_ai')
     .from('email_campaigns')
     .insert({
+      ...scopeColumns(params.audienceScope, params.excludeSessionRegistrants),
       session_id: params.sessionId ?? null,
       subject: params.subject,
       body_text: params.bodyText,
@@ -2776,7 +2924,7 @@ export async function createEmailCampaign(params: {
     })
     .select()
     .single();
-  if (error) throw error;
+  if (error) throw explainMissingScopeColumns(error);
   return mapEmailCampaign(data as Record<string, unknown>);
 }
 
@@ -3010,31 +3158,31 @@ export async function recordEmailRecipients(
 // Returns registrations in the active session that have NOT yet been sent this campaign.
 export async function getUnemailedRegistrations(
   campaignId: string,
-  audience: 'verified' | 'unverified' | 'all',
+  audience: AudienceInput,
   sessionId?: string | null,
 ): Promise<EmailRecipient[]> {
-  const supabase = client();
-
-  // 1. Fetch emails already logged for this campaign.
-  const { data: sent } = await supabase
+  // 1. Fetch emails already logged for this campaign. Paged — past 1,000 the
+  //    unbounded read dropped the rest, and "Send to new" re-emailed them.
+  const sent = await fetchAllRows<{ email: string }>(() => client()
     .schema('excel_to_ai')
     .from('email_campaign_recipients')
     .select('email')
-    .eq('campaign_id', campaignId);
+    .eq('campaign_id', campaignId)
+    .order('email', { ascending: true }));
 
-  const sentEmails = new Set((sent ?? []).map(r => (r.email as string).toLowerCase()));
+  const sentEmails = new Set(sent.map(r => emailKey(r.email)));
 
   // 2. Fetch all matching registrations.
-  const all = await getEmailRecipients(audience, sessionId);
+  const all = await recipientsFor(audience, sessionId, 'email');
 
   // 3. Filter out already-sent.
-  return all.filter(r => !sentEmails.has(r.email.toLowerCase()));
+  return all.filter(r => !sentEmails.has(emailKey(r.email)));
 }
 
 // Returns the count of registrations that haven't received a specific campaign.
 export async function getUnemailedCount(
   campaignId: string,
-  audience: 'verified' | 'unverified' | 'all',
+  audience: AudienceInput,
   sessionId?: string | null,
 ): Promise<number> {
   const list = await getUnemailedRegistrations(campaignId, audience, sessionId);
@@ -3220,6 +3368,9 @@ export interface WhatsAppCampaign {
   autoSendTrigger: WhatsAppTrigger | null;
   delayValue: number;
   delayUnit: 'minutes' | 'hours' | 'days';
+  // Who the audience is drawn from (migration 0036) — see AudienceScope.
+  audienceScope: AudienceScope;
+  excludeSessionRegistrants: boolean;
 }
 
 function mapWhatsAppCampaign(r: Record<string, unknown>): WhatsAppCampaign {
@@ -3243,6 +3394,9 @@ function mapWhatsAppCampaign(r: Record<string, unknown>): WhatsAppCampaign {
     autoSendTrigger:  (r.auto_send_trigger as WhatsAppCampaign['autoSendTrigger']) ?? null,
     delayValue:       (r.delay_value as number) ?? 15,
     delayUnit:        (r.delay_unit as WhatsAppCampaign['delayUnit']) ?? 'minutes',
+    // Absent before migration 0036 runs — every such campaign was session-scoped.
+    audienceScope:    (r.audience_scope as AudienceScope | undefined) ?? 'session',
+    excludeSessionRegistrants: (r.exclude_session_registrants as boolean | undefined) ?? false,
   };
 }
 
@@ -3260,11 +3414,14 @@ export async function createWhatsAppCampaign(params: {
   autoSendTrigger?: WhatsAppTrigger | null;
   delayValue?: number;
   delayUnit?: 'minutes' | 'hours' | 'days';
+  audienceScope?: AudienceScope;
+  excludeSessionRegistrants?: boolean;
 }): Promise<WhatsAppCampaign> {
   const { data, error } = await client()
     .schema('excel_to_ai')
     .from('whatsapp_campaigns')
     .insert({
+      ...scopeColumns(params.audienceScope, params.excludeSessionRegistrants),
       session_id:       params.sessionId ?? null,
       template_name:    params.templateName,
       language_code:    params.languageCode,
@@ -3281,7 +3438,7 @@ export async function createWhatsAppCampaign(params: {
     })
     .select()
     .single();
-  if (error) throw error;
+  if (error) throw explainMissingScopeColumns(error);
   return mapWhatsAppCampaign(data as Record<string, unknown>);
 }
 
@@ -3760,14 +3917,16 @@ export async function updateWhatsAppSendLogByMessageId(
 export async function getWhatsAppCampaignLogs(
   campaignId: string,
 ): Promise<{ id: string; phone: string; recipientName: string; status: string; errorDetail: string | null; metaMessageId: string | null; sentAt: string; deliveredAt: string | null; readAt: string | null }[]> {
-  const { data, error } = await client()
+  // Paged — a campaign past 1,000 log rows would otherwise freeze its counters
+  // at 1,000 and hide everyone after that from the Recipients tab.
+  const data = await fetchAllRows<Record<string, unknown>>(() => client()
     .schema('excel_to_ai')
     .from('whatsapp_send_log')
     .select('id, phone, recipient_name, status, error_detail, meta_message_id, sent_at, delivered_at, read_at')
     .eq('campaign_id', campaignId)
-    .order('sent_at', { ascending: true });
-  if (error) throw error;
-  return (data ?? []).map(r => ({
+    .order('sent_at', { ascending: true })
+    .order('id', { ascending: true }));
+  return data.map(r => ({
     id:             r.id as string,
     phone:          r.phone as string,
     recipientName:  (r.recipient_name as string | null) ?? '',
@@ -4236,24 +4395,26 @@ export async function getCampaignIdsWithPendingQueue(limit = 500): Promise<strin
 // Phones are compared on their last 10 digits so 91-prefix variants still match.
 export async function getUnsentWhatsAppRegistrations(
   campaignId: string,
-  audience: 'verified' | 'unverified' | 'all',
+  audience: AudienceInput,
   sessionId?: string | null,
 ): Promise<EmailRecipient[]> {
   // Only exclude phones that were SUCCESSFULLY sent (sent/delivered/read).
   // People whose previous attempt failed/was skipped are still "unsent" and
   // should be re-targeted, alongside genuinely new registrants.
-  const { data: sent } = await client()
+  //
+  // Paged: on a campaign past 1,000 sends, an unbounded read here returned only
+  // the first 1,000 — and "Send to new" re-messaged everyone after that.
+  const sent = await fetchAllRows<{ phone: string }>(() => client()
     .schema('excel_to_ai')
     .from('whatsapp_send_log')
-    .select('phone,status')
+    .select('phone')
     .eq('campaign_id', campaignId)
-    .in('status', ['sent', 'delivered', 'read']);
+    .in('status', ['sent', 'delivered', 'read'])
+    .order('id', { ascending: true }));
+  const sentPhones = new Set(sent.map(r => phoneKey(r.phone)));
 
-  const norm = (p: string) => (p || '').replace(/\D/g, '').slice(-10);
-  const sentPhones = new Set((sent ?? []).map(r => norm(r.phone as string)));
-
-  const all = await getEmailRecipients(audience, sessionId);
-  return all.filter(r => r.phone?.trim() && !sentPhones.has(norm(r.phone)));
+  const all = await recipientsFor(audience, sessionId, 'whatsapp');
+  return all.filter(r => r.phone?.trim() && !sentPhones.has(phoneKey(r.phone)));
 }
 
 // Recipients who FAILED in this campaign (best status = failed, i.e. never
@@ -4261,26 +4422,27 @@ export async function getUnsentWhatsAppRegistrations(
 // someone who has since verified / left the audience.
 export async function getFailedWhatsAppRecipients(
   campaignId: string,
-  audience: 'verified' | 'unverified' | 'all',
+  audience: AudienceInput,
   sessionId?: string | null,
 ): Promise<EmailRecipient[]> {
-  const { data } = await client()
+  const data = await fetchAllRows<{ phone: string; status: string }>(() => client()
     .schema('excel_to_ai')
     .from('whatsapp_send_log')
     .select('phone,status')
-    .eq('campaign_id', campaignId);
+    .eq('campaign_id', campaignId)
+    .order('id', { ascending: true }));
 
-  const norm = (p: string) => (p || '').replace(/\D/g, '').slice(-10);
+  const norm = phoneKey;
   const rank: Record<string, number> = { read: 4, delivered: 3, sent: 2, failed: 1, skipped: 0 };
   const best = new Map<string, string>();
-  for (const r of data ?? []) {
+  for (const r of data) {
     const k = norm(r.phone as string); if (!k) continue;
     const s = r.status as string;
     if (!best.has(k) || (rank[s] ?? -1) > (rank[best.get(k)!] ?? -1)) best.set(k, s);
   }
   const failedPhones = new Set([...best.entries()].filter(([, s]) => s === 'failed').map(([k]) => k));
 
-  const all = await getEmailRecipients(audience, sessionId);
+  const all = await recipientsFor(audience, sessionId, 'whatsapp');
   return all.filter(r => r.phone?.trim() && failedPhones.has(norm(r.phone)));
 }
 
@@ -4290,13 +4452,15 @@ export async function getFailedWhatsAppRecipients(
 export async function getWhatsAppDailySentCount(): Promise<number> {
   const todayUtcMidnight = new Date();
   todayUtcMidnight.setUTCHours(0, 0, 0, 0);
-  const { data, error } = await client()
+  // Paged — the cap check itself must not undercount once a day passes 1,000
+  // sends (any WA_DAILY_LIMIT above 1,000 would otherwise never trip).
+  const data = await fetchAllRows<{ phone: string }>(() => client()
     .schema('excel_to_ai')
     .from('whatsapp_send_log')
     .select('phone')
     .in('status', ['sent', 'delivered', 'read'])
-    .gte('sent_at', todayUtcMidnight.toISOString());
-  if (error) throw error;
-  const uniq = new Set((data ?? []).map(r => (r.phone as string || '').replace(/\D/g, '').slice(-10)));
+    .gte('sent_at', todayUtcMidnight.toISOString())
+    .order('id', { ascending: true }));
+  const uniq = new Set(data.map(r => phoneKey(r.phone)));
   return uniq.size;
 }

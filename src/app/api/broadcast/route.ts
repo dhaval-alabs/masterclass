@@ -3,6 +3,7 @@ export const maxDuration = 300;
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { runBroadcast, BroadcastError, type BroadcastInput } from '@/lib/broadcast';
+import { MigrationRequiredError } from '@/lib/db';
 
 // POST /api/broadcast — internal, API-key-authed programmatic broadcasting for
 // BOTH WhatsApp and Email. See docs/broadcast-api.md for the full contract.
@@ -45,6 +46,9 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     if (err instanceof BroadcastError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.status });
+    }
+    if (err instanceof MigrationRequiredError) {
+      return NextResponse.json({ success: false, error: err.message }, { status: 503 });
     }
     console.error('[broadcast] unexpected error:', err);
     return NextResponse.json({ success: false, error: 'Internal server error while broadcasting.' }, { status: 500 });

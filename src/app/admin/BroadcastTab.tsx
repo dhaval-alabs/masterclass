@@ -7,6 +7,11 @@ import WhatsAppAutomationsPanel from "./WhatsAppAutomationsPanel";
 type Channel = "whatsapp" | "email";
 type TargetMode = "audience" | "recipients";
 type Audience = "all" | "verified" | "unverified";
+type Scope = "session" | "all_sessions";
+interface PreviewInfo {
+  sessionCode: string | null;
+  whatsapp?: { dailyLimit: number; broadcastPerDay: number; estimatedDays: number };
+}
 
 interface WaTemplateButton { type: string; text: string }
 interface WaTemplate {
@@ -32,6 +37,13 @@ const AUDIENCE_LABEL: Record<Audience, string> = {
   all: "Everyone who registered",
   verified: "Verified registrants (completed OTP)",
   unverified: "Unverified (started but didn't verify)",
+};
+// Across every masterclass a person can have several registrations, so the
+// verified/unverified split means something slightly different.
+const AUDIENCE_LABEL_ALL_SESSIONS: Record<Audience, string> = {
+  all: "Everyone — verified and unverified",
+  verified: "Verified in at least one past masterclass",
+  unverified: "Never verified in any masterclass",
 };
 
 function templateNeedsHeaderImage(t: WaTemplate | null): boolean {
@@ -64,6 +76,10 @@ export default function BroadcastTab() {
   const [channel, setChannel] = useState<Channel>("whatsapp");
   const [targetMode, setTargetMode] = useState<TargetMode>("audience");
   const [audience, setAudience] = useState<Audience>("verified");
+  // 'all_sessions' reaches everyone who ever registered — for promoting a new
+  // masterclass to past registrants.
+  const [scope, setScope] = useState<Scope>("session");
+  const [excludeCurrent, setExcludeCurrent] = useState(true);
   const [recipientsText, setRecipientsText] = useState("");
 
   // WhatsApp content
@@ -95,6 +111,7 @@ export default function BroadcastTab() {
   const [scheduledFor, setScheduledFor] = useState("");
 
   const [previewCount, setPreviewCount] = useState<number | null>(null);
+  const [previewInfo, setPreviewInfo] = useState<PreviewInfo | null>(null);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -133,15 +150,18 @@ export default function BroadcastTab() {
   const loadPreview = useCallback(() => {
     if (targetMode !== "audience") { setPreviewCount(null); return; }
     setIsPreviewing(true);
-    fetch(`/api/admin/broadcast?channel=${channel}&audience=${audience}`)
+    fetch(`/api/admin/broadcast?channel=${channel}&audience=${audience}&scope=${scope}&exclude=${excludeCurrent}`)
       .then(r => r.json())
-      .then(d => setPreviewCount(typeof d?.count === "number" ? d.count : null))
-      .catch(() => setPreviewCount(null))
+      .then(d => {
+        setPreviewCount(typeof d?.count === "number" ? d.count : null);
+        setPreviewInfo({ sessionCode: d?.sessionCode ?? null, whatsapp: d?.whatsapp });
+      })
+      .catch(() => { setPreviewCount(null); setPreviewInfo(null); })
       .finally(() => setIsPreviewing(false));
-  }, [channel, audience, targetMode]);
+  }, [channel, audience, targetMode, scope, excludeCurrent]);
 
   useEffect(() => { loadPreview(); }, [loadPreview]);
-  useEffect(() => { setShowConfirm(false); setResult(null); setError(null); }, [channel, targetMode, audience, recipientsText, templateName, JSON.stringify(variables), headerImageUrl, subject, bodyText, when, scheduledFor]);
+  useEffect(() => { setShowConfirm(false); setResult(null); setError(null); }, [channel, targetMode, audience, scope, excludeCurrent, recipientsText, templateName, JSON.stringify(variables), headerImageUrl, subject, bodyText, when, scheduledFor]);
 
   function selectTemplate(t: WaTemplate) {
     setTemplateName(t.name);
@@ -207,8 +227,11 @@ export default function BroadcastTab() {
 
   function buildBody() {
     const base: Record<string, unknown> = { channel, mode: targetMode };
-    if (targetMode === "audience") base.audience = audience;
-    else base.recipients = parsedRecipients;
+    if (targetMode === "audience") {
+      base.audience = audience;
+      base.scope = scope;
+      if (scope === "all_sessions") base.excludeCurrentRegistrants = excludeCurrent;
+    } else base.recipients = parsedRecipients;
 
     if (channel === "whatsapp") {
       base.templateName = templateName.trim();
@@ -299,13 +322,47 @@ export default function BroadcastTab() {
 
         {targetMode === "audience" ? (
           <div>
+            {/* Which registrants: this masterclass only, or everyone ever. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+              {([
+                { value: "session" as Scope, title: `This masterclass${previewInfo?.sessionCode ? ` (${previewInfo.sessionCode})` : ""}`, sub: "People registered for the active session" },
+                { value: "all_sessions" as Scope, title: "Everyone who ever registered", sub: "All past masterclasses — one message per person" },
+              ]).map(o => (
+                <button key={o.value} onClick={() => setScope(o.value)}
+                  className={`text-left px-3 py-2.5 rounded-lg border-2 transition-all ${scope === o.value ? "border-[#00DF83] bg-[#00DF83]/5" : "border-slate-200 hover:border-slate-300"}`}>
+                  <div className="text-sm font-semibold text-[#003368]">{o.title}</div>
+                  <div className="text-[11px] text-slate-500">{o.sub}</div>
+                </button>
+              ))}
+            </div>
+
             <select value={audience} onChange={e => setAudience(e.target.value as Audience)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
-              {(Object.keys(AUDIENCE_LABEL) as Audience[]).map(a => <option key={a} value={a}>{AUDIENCE_LABEL[a]}</option>)}
+              {(Object.keys(AUDIENCE_LABEL) as Audience[]).map(a => (
+                <option key={a} value={a}>{(scope === "all_sessions" ? AUDIENCE_LABEL_ALL_SESSIONS : AUDIENCE_LABEL)[a]}</option>
+              ))}
             </select>
+
+            {scope === "all_sessions" && (
+              <label className="mt-2 flex items-start gap-2 text-sm text-slate-600 cursor-pointer">
+                <input type="checkbox" checked={excludeCurrent} onChange={e => setExcludeCurrent(e.target.checked)} className="mt-0.5 w-4 h-4 rounded border-slate-300 text-[#00875A]" />
+                <span>
+                  Skip people already registered for {previewInfo?.sessionCode ?? "the current masterclass"}
+                  <span className="block text-[11px] text-slate-400">So a &ldquo;register now&rdquo; message never reaches someone who already did.</span>
+                </span>
+              </label>
+            )}
+
             <p className="mt-2 text-sm text-slate-600 flex items-center gap-1.5">
               {isPreviewing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Users className="w-3.5 h-3.5 text-[#00875A]" />}
-              {previewCount === null ? "—" : <><span className="font-bold text-[#003368]">{previewCount.toLocaleString()}</span> {channel === "whatsapp" ? "have a phone number" : "have an email"} and will receive this.</>}
+              {previewCount === null ? "—" : <><span className="font-bold text-[#003368]">{previewCount.toLocaleString()}</span> {scope === "all_sessions" ? "unique people" : ""} {channel === "whatsapp" ? "with a phone number" : "with an email"} will receive this.</>}
             </p>
+
+            {/* A WhatsApp send bigger than one day's cap drains over several days. */}
+            {channel === "whatsapp" && previewInfo?.whatsapp && previewCount !== null && previewInfo.whatsapp.estimatedDays > 1 && (
+              <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                WhatsApp broadcasts go out at up to <span className="font-semibold">{previewInfo.whatsapp.broadcastPerDay.toLocaleString()}/day</span> (daily cap {previewInfo.whatsapp.dailyLimit.toLocaleString()}, the rest kept free so OTP nudges, welcomes and reminders keep working). This one reaches everyone in about <span className="font-semibold">{previewInfo.whatsapp.estimatedDays} days</span> — the queue continues automatically, no need to resend.
+              </p>
+            )}
           </div>
         ) : (
           <div>
@@ -510,7 +567,9 @@ export default function BroadcastTab() {
           <p className="text-sm text-slate-600 mb-4">
             This will send a <span className="font-semibold">{channel === "whatsapp" ? "WhatsApp message" : "email"}</span> to{" "}
             <span className="font-semibold text-[#003368]">{recipientCount === null ? "the selected audience" : `~${recipientCount.toLocaleString()} ${recipientCount === 1 ? "person" : "people"}`}</span>
-            {when === "schedule" && canSchedule ? <> at <span className="font-semibold">{scheduledFor.replace("T", " ")} IST</span></> : <> right now</>}. This cannot be undone.
+            {targetMode === "audience" && scope === "all_sessions" && <> from <span className="font-semibold">every past masterclass</span></>}
+            {when === "schedule" && canSchedule ? <> at <span className="font-semibold">{scheduledFor.replace("T", " ")} IST</span></> : <> right now</>}
+            {channel === "whatsapp" && targetMode === "audience" && previewInfo?.whatsapp && previewInfo.whatsapp.estimatedDays > 1 && <>, finishing over about <span className="font-semibold">{previewInfo.whatsapp.estimatedDays} days</span></>}. This cannot be undone.
           </p>
           <div className="flex gap-3">
             <button onClick={handleSend} disabled={isSending} className="flex-1 py-3 rounded-xl bg-[#00DF83] text-[#003368] font-bold hover:brightness-95 disabled:opacity-60 flex items-center justify-center gap-2">
