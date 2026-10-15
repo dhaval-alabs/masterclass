@@ -47,10 +47,12 @@ export async function generateMetadata(): Promise<Metadata> {
       description,
       ...(ogImage ? { images: [ogImage] } : {}),
     },
+    // Kept out of Google's organic index on purpose — see headers() in
+    // next.config.ts. Replaces (not supplements) the old `index` directive.
     robots: {
-      index: true,
+      index: false,
       follow: true,
-      googleBot: { index: true, follow: true, 'max-snippet': -1, 'max-image-preview': 'large' },
+      googleBot: { index: false, follow: true },
     },
   };
 }
