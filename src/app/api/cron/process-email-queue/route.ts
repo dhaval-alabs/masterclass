@@ -13,6 +13,7 @@ import {
 import { getDueScheduledEmailCampaigns } from '@/lib/db';
 import { buildEmailHtml } from '@/lib/email';
 import { fireEmailCampaign } from '@/lib/email-campaign';
+import { missedScheduleNote } from '@/lib/missed-schedule';
 
 // A scheduled broadcast dispatches its whole audience in one run.
 export const maxDuration = 300;
@@ -20,10 +21,12 @@ export const maxDuration = 300;
 const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM = process.env.RESEND_FROM_EMAIL ?? 'onboarding@resend.dev';
 
-// POST /api/cron/process-email-queue
-// Called by Vercel Cron every 5 minutes. Sends all queue items whose
-// scheduled_for has passed and marks them sent or failed.
-export async function POST(req: NextRequest) {
+// GET|POST /api/cron/process-email-queue
+// Called by Vercel Cron every 5 minutes. Vercel Cron always sends a GET; this
+// route used to export only POST, so every tick got a 405 and scheduled emails
+// never fired. Sends all queue items whose scheduled_for has passed and marks
+// them sent or failed.
+async function handle(req: NextRequest) {
   const auth = req.headers.get('authorization');
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -34,9 +37,18 @@ export async function POST(req: NextRequest) {
     //    0034). Runs before the per-recipient drain below so a campaign
     //    scheduled for this minute goes out in this same tick.
     let scheduledFired = 0;
+    let scheduledMissed = 0;
     try {
       for (const campaign of await getDueScheduledEmailCampaigns(25)) {
         try {
+          // Too late to be useful (see missed-schedule.ts) — hold as a draft.
+          const missed = missedScheduleNote(campaign.scheduledFor);
+          if (missed) {
+            await updateEmailCampaign(campaign.id, { status: 'draft', errorSummary: missed });
+            console.warn(`[cron] email scheduled ${campaign.id} missed its time; held as draft`);
+            scheduledMissed++;
+            continue;
+          }
           const r = await fireEmailCampaign(campaign);
           scheduledFired++;
           console.log(`[cron] email broadcast ${campaign.id} → ${r.status} (${r.sentCount}/${r.totalRecipients})`);
@@ -51,7 +63,7 @@ export async function POST(req: NextRequest) {
     // 2. Drain the per-recipient queue used by trigger-based auto-sends.
     const items = await getDueScheduledEmails(200);
     if (items.length === 0) {
-      return NextResponse.json({ scheduledFired, processed: 0, sent: 0, failed: 0 });
+      return NextResponse.json({ scheduledFired, scheduledMissed, processed: 0, sent: 0, failed: 0 });
     }
 
     // Fetch branding settings once for all emails in this run.
@@ -153,9 +165,17 @@ export async function POST(req: NextRequest) {
       totalFailed += campaignFailed;
     }
 
-    return NextResponse.json({ scheduledFired, processed: items.length, sent: totalSent, failed: totalFailed });
+    return NextResponse.json({ scheduledFired, scheduledMissed, processed: items.length, sent: totalSent, failed: totalFailed });
   } catch (err) {
     console.error('[cron] process-email-queue error:', err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
+}
+
+export async function GET(req: NextRequest) {
+  return handle(req);
+}
+
+export async function POST(req: NextRequest) {
+  return handle(req);
 }

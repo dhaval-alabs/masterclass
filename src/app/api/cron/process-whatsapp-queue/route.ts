@@ -1,15 +1,20 @@
 export const maxDuration = 300;
 import { NextRequest, NextResponse } from 'next/server';
-import { getDueScheduledWhatsAppCampaigns, getCampaignIdsWithPendingQueue } from '@/lib/db';
+import { getDueScheduledWhatsAppCampaigns, getCampaignIdsWithPendingQueue, updateWhatsAppCampaign } from '@/lib/db';
 import { fireWhatsAppCampaign, drainWhatsAppCampaignQueue, drainWhatsAppAutoSends } from '@/lib/whatsapp-campaign';
+import { missedScheduleNote } from '@/lib/missed-schedule';
 
-// POST /api/cron/process-whatsapp-queue
-// Called by Vercel Cron every 5 minutes. Two passes:
+// GET|POST /api/cron/process-whatsapp-queue
+// Called by Vercel Cron every 5 minutes — and Vercel Cron always sends a GET.
+// This route used to export only POST (written for the GitHub Actions driver,
+// which POSTs), so once that driver was retired on 2026-10-05 every Vercel tick
+// got a 405 and nothing scheduled ever fired. POST stays for the manual
+// fallback workflow. Three passes:
 //   1. Fire any scheduled campaign whose time has passed (enqueues its audience).
 //   2. Drain a chunk of every campaign that still has pending recipients.
 // Both respect the daily cap; work left over is picked up on the next tick, so
 // any audience size drains safely over multiple ticks without ever timing out.
-export async function POST(req: NextRequest) {
+async function handle(req: NextRequest) {
   const auth = req.headers.get('authorization');
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -24,9 +29,18 @@ export async function POST(req: NextRequest) {
     // 1. Fire due scheduled campaigns.
     const due = await getDueScheduledWhatsAppCampaigns(25);
     let scheduledFired = 0;
+    let scheduledMissed = 0;
     for (const campaign of due) {
       if (Date.now() - startedAt > DEADLINE_MS) break;
       try {
+        // Too late to be useful (see missed-schedule.ts) — hold as a draft.
+        const missed = missedScheduleNote(campaign.scheduledFor);
+        if (missed) {
+          await updateWhatsAppCampaign(campaign.id, { status: 'draft', errorSummary: missed });
+          console.warn(`[cron] whatsapp scheduled ${campaign.id} missed its time; held as draft`);
+          scheduledMissed++;
+          continue;
+        }
         await fireWhatsAppCampaign(campaign);
         scheduledFired++;
       } catch (err) {
@@ -62,9 +76,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ scheduledFired, queuesDrained, sent, stillQueued, pendingCampaigns: pendingIds.length, autoSends });
+    return NextResponse.json({ scheduledFired, scheduledMissed, queuesDrained, sent, stillQueued, pendingCampaigns: pendingIds.length, autoSends });
   } catch (err) {
     console.error('[cron] process-whatsapp-queue error:', err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
+}
+
+export async function GET(req: NextRequest) {
+  return handle(req);
+}
+
+export async function POST(req: NextRequest) {
+  return handle(req);
 }
