@@ -1651,6 +1651,14 @@ export default function WhatsAppTab() {
                             </div>
                           )}
 
+                          {/* A scheduled send the cron reached too late is held as a draft with a note. */}
+                          {c.status === "draft" && c.errorSummary && (
+                            <div className="flex items-start gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                              <div>{c.errorSummary}</div>
+                            </div>
+                          )}
+
                           {(isLoadingLogs === c.id || !logs) ? (
                             <div className="py-6 flex justify-center"><Loader2 className="w-4 h-4 text-[#00DF83] animate-spin" /></div>
                           ) : (() => {

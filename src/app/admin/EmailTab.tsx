@@ -508,6 +508,14 @@ function CampaignStatsPanel({ campaign }: { campaign: Campaign }) {
         </div>
       )}
 
+      {/* A scheduled send the cron reached too late is held as a draft with a note. */}
+      {campaign.status === "draft" && campaign.errorSummary && (
+        <div className="flex items-start gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <div>{campaign.errorSummary}</div>
+        </div>
+      )}
+
       {/* Metric cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {METRICS.map(m => (
