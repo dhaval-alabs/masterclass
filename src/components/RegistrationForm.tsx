@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { Loader2, ArrowLeft, CheckCircle2, Phone, User, Mail, MapPin, Briefcase, Megaphone } from "lucide-react";
 import { initBehaviourTracking, getBehaviourSnapshot } from "@/utils/trackBehaviour";
 import { INDIAN_CITIES, isValidCity } from "@/lib/indian-cities";
 import { validateName, validateEmail, validatePhone, normalizeEmail, normalizePhone } from "@/lib/form-validation";
 import QualificationChat from "./QualificationChat";
+
+// The query string doesn't change while the form is open — nothing to subscribe to.
+const noopSubscribe = () => () => {};
 
 export interface RegistrationFormCopy {
   labelName?: string | null;
@@ -142,6 +145,17 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
     if (extras.city) params.set('city', extras.city);
     return `/thankyou-for-registration?${params.toString()}`;
   };
+
+  // Visitors who arrive on a tagged link (every ad, WhatsApp and email link
+  // carries utm_source) aren't asked "How did you hear about this masterclass?":
+  // the UTMs already record that, and each extra field costs registrations. The
+  // server snapshot is `true` (hidden), so the cached HTML that ad clicks get
+  // never shows the field. Untagged visitors see it once the page loads.
+  const arrivedViaTaggedLink = useSyncExternalStore(
+    noopSubscribe,
+    () => !!new URLSearchParams(window.location.search).get("utm_source"),
+    () => true,
+  );
 
   const [formData, setFormData] = useState({
     fullName: "",
@@ -322,7 +336,7 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
       submittingInitialRef.current = false;
       return;
     }
-    if (!formData.referralSource) { setError('Please tell us how you heard about this masterclass.'); submittingInitialRef.current = false; return; }
+    if (!arrivedViaTaggedLink && !formData.referralSource) { setError('Please tell us how you heard about this masterclass.'); submittingInitialRef.current = false; return; }
 
     // Normalize sanitized values before submit.
     const normalizedName  = formData.fullName.trim().replace(/\s+/g, ' ');
@@ -372,7 +386,10 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
           phone: normalizedPhone,
           city: normalizedCity,
           status: formData.status,
-          referralSource: formData.referralSource,
+          // Tagged visitors skip the question; record where the link said they came from.
+          referralSource: arrivedViaTaggedLink
+            ? `UTM: ${[utmRef.current.utm_source, utmRef.current.utm_medium].filter(Boolean).join(' / ')}`
+            : formData.referralSource,
           ...utmRef.current,
           gclid: gclidRef.current,
           typeFilter,
@@ -797,6 +814,7 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
             </datalist>
           </div>
         </div>
+        {!arrivedViaTaggedLink && (
         <div>
           <label className="text-[10px] font-bold uppercase text-slate-400 mb-1 flex items-center gap-1.5"><Megaphone className="w-3 h-3" /> {labelReferral}</label>
           <select name="referralSource" required value={formData.referralSource} onChange={handleInputChange} className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50/50 appearance-none">
@@ -804,6 +822,7 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
             {referralOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
           </select>
         </div>
+        )}
       </div>
       {error && <p className="text-xs text-red-500">{error}</p>}
       <button type="submit" disabled={isLoading} className="w-full bg-[#00DF83] text-[#003368] font-bold py-4 rounded-xl shadow-lg shadow-[#00DF83]/20 mt-4 group">

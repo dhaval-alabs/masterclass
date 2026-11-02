@@ -8,7 +8,12 @@ import { getFaqs, getWebinarConfig, getFeatures, getAgendaItems } from "@/lib/db
 import { renderRich, parseBullets } from "@/lib/rich-text";
 import SeoJsonLd from "@/components/SeoJsonLd";
 
-export const dynamic = 'force-dynamic';
+// Cached and regenerated at most once a minute (ISR) instead of rebuilt on
+// every request. Rendering per request meant every ad click waited 1.6–2.5s for
+// the server before a byte arrived. Nothing here varies per visitor: the
+// countdown, UTMs and form all run in the browser. Admin edits and session
+// switches show up within 60 seconds.
+export const revalidate = 60;
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://masterclass.analytixlabs.co.in';
 
