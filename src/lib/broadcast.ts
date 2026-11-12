@@ -24,6 +24,8 @@ import {
   type WhatsAppCampaign,
   type EmailCampaign,
   type AudienceScope,
+  type AudienceFilter,
+  ATTENDANCE_AUDIENCES,
   type AudienceSpec,
 } from './db';
 import { startCampaignSend, fireWhatsAppCampaign } from './whatsapp-campaign';
@@ -31,7 +33,7 @@ import { sendCampaignEmails } from './email';
 
 export type BroadcastChannel = 'whatsapp' | 'email';
 export type BroadcastMode = 'campaign' | 'audience' | 'recipients';
-export type Audience = 'verified' | 'unverified' | 'all';
+export type Audience = AudienceFilter;
 
 export interface BroadcastInput {
   channel: BroadcastChannel;
@@ -89,7 +91,7 @@ export class BroadcastError extends Error {
   }
 }
 
-const VALID_AUDIENCES: Audience[] = ['verified', 'unverified', 'all'];
+const VALID_AUDIENCES: Audience[] = ['verified', 'unverified', 'all', 'never_attended', 'verified_no_show'];
 
 function assert(cond: unknown, message: string): asserts cond {
   if (!cond) throw new BroadcastError(message);
@@ -104,6 +106,7 @@ export function audienceSpecFor(input: Pick<BroadcastInput, 'audience' | 'scope'
   const scope = input.scope ?? 'session';
   assert(VALID_SCOPES.includes(scope), `scope must be one of ${VALID_SCOPES.join(', ')}.`);
   const audience = input.audience!;
+  assert(scope === 'all_sessions' || !ATTENDANCE_AUDIENCES.includes(audience), `audience "${audience}" needs scope "all_sessions" (it uses attendance across past masterclasses).`);
   if (scope === 'session') {
     return { spec: { audience, scope, sessionId: activeSessionId }, scope, excludeSessionRegistrants: false };
   }

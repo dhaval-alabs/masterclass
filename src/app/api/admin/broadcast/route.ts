@@ -30,7 +30,10 @@ export async function GET(req: NextRequest) {
   const audience = searchParams.get('audience') as Audience | null;
   const scope = (searchParams.get('scope') === 'all_sessions' ? 'all_sessions' : 'session') as AudienceScope;
   const exclude = searchParams.get('exclude') !== 'false';
-  if (audience !== 'verified' && audience !== 'unverified' && audience !== 'all') {
+  if (!audience || !['verified', 'unverified', 'all', 'never_attended', 'verified_no_show'].includes(audience)) {
+    return NextResponse.json({ count: 0 });
+  }
+  if (scope === 'session' && (audience === 'never_attended' || audience === 'verified_no_show')) {
     return NextResponse.json({ count: 0 });
   }
   try {
