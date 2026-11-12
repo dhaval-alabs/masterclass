@@ -91,6 +91,26 @@ export default function AdminPortal() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<AdminTab>("settings");
 
+  // The admin login lasts 24 hours. A tab left open past that keeps working
+  // as if it's logged in, but every API call comes back 401 "Unauthorized",
+  // which surfaced as cryptic errors ('Unexpected token 'U', "Unauthorized" is
+  // not valid JSON', counts showing "—"). Watch every same-origin API response
+  // in the panel and say plainly when the session has expired.
+  const [sessionExpired, setSessionExpired] = useState(false);
+  useEffect(() => {
+    const originalFetch = window.fetch;
+    window.fetch = async (...args: Parameters<typeof fetch>) => {
+      const res = await originalFetch(...args);
+      const url = typeof args[0] === "string" ? args[0] : args[0] instanceof URL ? args[0].href : args[0].url;
+      const path = new URL(url, window.location.origin);
+      if (res.status === 401 && path.origin === window.location.origin && path.pathname.startsWith("/api/") && !path.pathname.startsWith("/api/auth/")) {
+        setSessionExpired(true);
+      }
+      return res;
+    };
+    return () => { window.fetch = originalFetch; };
+  }, []);
+
   // Settings State
   const [settings, setSettings] = useState({
     speakerName: "",
@@ -805,6 +825,15 @@ export default function AdminPortal() {
 
   return (
     <div className="min-h-screen flex font-sans text-slate-900">
+      {sessionExpired && (
+        <div role="alert" className="fixed top-0 inset-x-0 z-50 bg-amber-500 text-[#003368] text-sm font-semibold px-4 py-2.5 flex items-center justify-center gap-3 shadow">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>Your admin login has expired (it lasts 24 hours), so nothing can be saved or uploaded.</span>
+          <a href="/admin/login" target="_blank" rel="noopener" className="underline whitespace-nowrap">Log in again in a new tab</a>
+          <span className="hidden md:inline font-normal">then retry here; what you&apos;ve typed is kept.</span>
+          <button onClick={() => setSessionExpired(false)} className="ml-2 font-normal underline">Dismiss</button>
+        </div>
+      )}
 
       {/* Sidebar */}
       <aside className="w-56 shrink-0 bg-[#003368] flex flex-col h-screen sticky top-0">

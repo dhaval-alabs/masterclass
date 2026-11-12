@@ -184,7 +184,10 @@ export default function BroadcastTab() {
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const data = await res.json();
+      // 401 comes back as plain text, not JSON — parsing it was the
+      // 'Unexpected token 'U'' error. Say what actually happened.
+      if (res.status === 401) throw new Error("Your admin login has expired. Log in again in a new tab, then upload again.");
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`);
       setHeaderImageUrl(data.url);
     } catch (err) {
