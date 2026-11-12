@@ -6,7 +6,9 @@ import WhatsAppAutomationsPanel from "./WhatsAppAutomationsPanel";
 
 type Channel = "whatsapp" | "email";
 type TargetMode = "audience" | "recipients";
-type Audience = "all" | "verified" | "unverified";
+type Audience = "all" | "verified" | "unverified" | "never_attended" | "verified_no_show";
+// Attendance-based audiences only exist across every masterclass.
+const ATTENDANCE_AUDIENCES: Audience[] = ["never_attended", "verified_no_show"];
 type Scope = "session" | "all_sessions";
 interface PreviewInfo {
   sessionCode: string | null;
@@ -36,7 +38,7 @@ interface BroadcastResult {
   error?: string;
 }
 
-const AUDIENCE_LABEL: Record<Audience, string> = {
+const AUDIENCE_LABEL: Record<Exclude<Audience, "never_attended" | "verified_no_show">, string> = {
   all: "Everyone who registered",
   verified: "Verified registrants (completed OTP)",
   unverified: "Unverified (started but didn't verify)",
@@ -47,6 +49,8 @@ const AUDIENCE_LABEL_ALL_SESSIONS: Record<Audience, string> = {
   all: "Everyone — verified and unverified",
   verified: "Verified in at least one past masterclass",
   unverified: "Never verified in any masterclass",
+  never_attended: "Never attended any masterclass (verified or not)",
+  verified_no_show: "Verified but never attended (no-shows)",
 };
 
 function templateNeedsHeaderImage(t: WaTemplate | null): boolean {
@@ -331,7 +335,10 @@ export default function BroadcastTab() {
                 { value: "session" as Scope, title: `This masterclass${previewInfo?.sessionCode ? ` (${previewInfo.sessionCode})` : ""}`, sub: "People registered for the active session" },
                 { value: "all_sessions" as Scope, title: "Everyone who ever registered", sub: "All past masterclasses — one message per person" },
               ]).map(o => (
-                <button key={o.value} onClick={() => setScope(o.value)}
+                <button key={o.value} onClick={() => {
+                  setScope(o.value);
+                  if (o.value === "session" && ATTENDANCE_AUDIENCES.includes(audience)) setAudience("verified");
+                }}
                   className={`text-left px-3 py-2.5 rounded-lg border-2 transition-all ${scope === o.value ? "border-[#00DF83] bg-[#00DF83]/5" : "border-slate-200 hover:border-slate-300"}`}>
                   <div className="text-sm font-semibold text-[#003368]">{o.title}</div>
                   <div className="text-[11px] text-slate-500">{o.sub}</div>
@@ -340,9 +347,9 @@ export default function BroadcastTab() {
             </div>
 
             <select value={audience} onChange={e => setAudience(e.target.value as Audience)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
-              {(Object.keys(AUDIENCE_LABEL) as Audience[]).map(a => (
-                <option key={a} value={a}>{(scope === "all_sessions" ? AUDIENCE_LABEL_ALL_SESSIONS : AUDIENCE_LABEL)[a]}</option>
-              ))}
+              {scope === "all_sessions"
+                ? (Object.keys(AUDIENCE_LABEL_ALL_SESSIONS) as Audience[]).map(a => <option key={a} value={a}>{AUDIENCE_LABEL_ALL_SESSIONS[a]}</option>)
+                : (Object.keys(AUDIENCE_LABEL) as (keyof typeof AUDIENCE_LABEL)[]).map(a => <option key={a} value={a}>{AUDIENCE_LABEL[a]}</option>)}
             </select>
 
             {scope === "all_sessions" && (

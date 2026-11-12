@@ -2646,7 +2646,7 @@ export interface EmailCampaign {
   bodyText: string;
   bodyHtml: string | null;
   bannerUrl: string | null;
-  audience: 'verified' | 'unverified' | 'all';
+  audience: AudienceFilter;
   status: 'draft' | 'scheduled' | 'sending' | 'sent' | 'partial' | 'failed';
   totalRecipients: number;
   sentCount: number;
@@ -2771,7 +2771,12 @@ export async function getEmailRecipients(
 //                  promoting a new masterclass to past registrants.
 
 export type AudienceScope = 'session' | 'all_sessions';
-type AudienceFilter = 'verified' | 'unverified' | 'all';
+// The last two only apply across every masterclass (scope 'all_sessions') and
+// use Zoom attendance: "attended" = marked attended in ANY session.
+//   never_attended   — registered (verified or not), never attended any session
+//   verified_no_show — verified at least once, never attended any session
+export type AudienceFilter = 'verified' | 'unverified' | 'all' | 'never_attended' | 'verified_no_show';
+export const ATTENDANCE_AUDIENCES: readonly AudienceFilter[] = ['never_attended', 'verified_no_show'];
 
 export interface AudienceSpec {
   audience: AudienceFilter;
@@ -2804,28 +2809,32 @@ const emailKey = (e: string | null | undefined) => (e || '').trim().toLowerCase(
  */
 export async function resolveAudience(spec: AudienceSpec, channel: 'whatsapp' | 'email'): Promise<EmailRecipient[]> {
   if (spec.scope === 'session') {
-    const all = await getEmailRecipients(spec.audience, spec.sessionId);
+    if (ATTENDANCE_AUDIENCES.includes(spec.audience)) {
+      throw new Error(`Audience "${spec.audience}" uses attendance across past masterclasses, so it needs scope "all_sessions".`);
+    }
+    const all = await getEmailRecipients(spec.audience as 'verified' | 'unverified' | 'all', spec.sessionId);
     return channel === 'whatsapp' ? all.filter(r => r.phone?.trim()) : all.filter(r => r.email?.trim());
   }
 
   const rows = await fetchAllRows<{
     email: string | null; full_name: string | null; phone: string | null;
-    status: string | null; session_id: string | null; created_at: string;
+    status: string | null; session_id: string | null; created_at: string; attended: boolean | null;
   }>(() => client()
     .schema('excel_to_ai')
     .from('registrations')
-    .select('email, full_name, phone, status, session_id, created_at')
+    .select('email, full_name, phone, status, session_id, created_at, attended')
     .order('created_at', { ascending: true })
     .order('id', { ascending: true }));
 
   const keyOf = channel === 'whatsapp' ? (r: typeof rows[number]) => phoneKey(r.phone) : (r: typeof rows[number]) => emailKey(r.email);
-  const people = new Map<string, { latest: typeof rows[number]; everVerified: boolean; inExcluded: boolean }>();
+  const people = new Map<string, { latest: typeof rows[number]; everVerified: boolean; everAttended: boolean; inExcluded: boolean }>();
   for (const r of rows) {
     const k = keyOf(r);
     if (!k) continue;
-    const p = people.get(k) ?? { latest: r, everVerified: false, inExcluded: false };
+    const p = people.get(k) ?? { latest: r, everVerified: false, everAttended: false, inExcluded: false };
     p.latest = r;                                   // rows are ascending — last wins
     if (r.status === 'Verified') p.everVerified = true;
+    if (r.attended === true) p.everAttended = true;
     if (spec.excludeSessionId && r.session_id === spec.excludeSessionId) p.inExcluded = true;
     people.set(k, p);
   }
@@ -2835,6 +2844,8 @@ export async function resolveAudience(spec: AudienceSpec, channel: 'whatsapp' | 
     if (p.inExcluded) continue;
     if (spec.audience === 'verified' && !p.everVerified) continue;
     if (spec.audience === 'unverified' && p.everVerified) continue;
+    if (spec.audience === 'never_attended' && p.everAttended) continue;
+    if (spec.audience === 'verified_no_show' && (p.everAttended || !p.everVerified)) continue;
     out.push({ email: p.latest.email ?? '', fullName: p.latest.full_name ?? '', phone: p.latest.phone ?? '' });
   }
   return out;
@@ -2842,7 +2853,11 @@ export async function resolveAudience(spec: AudienceSpec, channel: 'whatsapp' | 
 
 /** Bridges legacy (filter, sessionId) callers and scope-aware specs. */
 async function recipientsFor(input: AudienceInput, sessionId: string | null | undefined, channel: 'whatsapp' | 'email'): Promise<EmailRecipient[]> {
-  if (typeof input === 'string') return getEmailRecipients(input, sessionId);
+  if (typeof input === 'string') {
+    // Attendance audiences only exist across sessions; a bare filter can't express that.
+    if (ATTENDANCE_AUDIENCES.includes(input)) return resolveAudience({ audience: input, scope: 'all_sessions', sessionId: null }, channel);
+    return getEmailRecipients(input as 'verified' | 'unverified' | 'all', sessionId);
+  }
   return resolveAudience(input, channel);
 }
 
@@ -2878,6 +2893,10 @@ function explainMissingScopeColumns(error: unknown): unknown {
   if (e?.code === 'PGRST204' && /audience_scope|exclude_session_registrants/.test(e.message ?? '')) {
     return new MigrationRequiredError('Sending to all past registrants needs migration 0036_broadcast_audience_scope.sql — run it in the Supabase SQL Editor, then try again.');
   }
+  // The audience CHECK constraint predates the attendance audiences.
+  if (e?.code === '23514' && /audience_check/.test(e.message ?? '')) {
+    return new MigrationRequiredError('The "never attended" audiences need migration 0037_broadcast_attendance_audiences.sql — run it in the Supabase SQL Editor, then try again.');
+  }
   return error;
 }
 
@@ -2891,7 +2910,7 @@ export async function createEmailCampaign(params: {
   autoSendAudience?: 'verified' | 'unverified' | 'all' | null;
   delayValue?: number;
   delayUnit?: 'minutes' | 'hours' | 'days';
-  audience: 'verified' | 'unverified' | 'all';
+  audience: AudienceFilter;
   totalRecipients: number;
   status?: EmailCampaign['status'];
   sentCount?: number;
@@ -3350,7 +3369,7 @@ export interface WhatsAppCampaign {
   sessionId: string | null;
   templateName: string;
   languageCode: string;
-  audience: 'verified' | 'unverified' | 'all';
+  audience: AudienceFilter;
   variables: string[];
   // Optional header image URL for templates with an IMAGE header.
   headerImageUrl: string | null;
@@ -3405,7 +3424,7 @@ export async function createWhatsAppCampaign(params: {
   sessionId?: string | null;
   templateName: string;
   languageCode: string;
-  audience: 'verified' | 'unverified' | 'all';
+  audience: AudienceFilter;
   variables: string[];
   headerImageUrl?: string | null;
   totalRecipients: number;

@@ -1315,7 +1315,7 @@ export default function EmailTab() {
 
                     {/* Quick stats pills */}
                     <div className="hidden sm:flex items-center gap-3 shrink-0 text-xs flex-wrap">
-                      <span className="capitalize text-slate-500">{c.audience}</span>
+                      <span className="capitalize text-slate-500">{c.audience.replace(/_/g, " ")}</span>
                       <span className="text-slate-400">·</span>
                       <span className="tabular-nums text-slate-600 font-semibold">{c.totalRecipients.toLocaleString()} <span className="font-normal text-slate-400">recip.</span></span>
                       {c.uniqueOpenCount > 0 && (
