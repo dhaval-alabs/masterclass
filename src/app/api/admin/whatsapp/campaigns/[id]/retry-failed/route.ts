@@ -16,7 +16,9 @@ export async function POST(
   try {
     const campaign = await getWhatsAppCampaignById(id);
     if (!campaign) return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
-    if (campaign.status === 'sending') return NextResponse.json({ error: 'Campaign is already sending' }, { status: 409 });
+    // Allowed while 'sending': this only (re)queues the failed people — the queue is
+    // deduped per (campaign, phone), so it can't double-send, and a long drain
+    // shouldn't have to finish before its failures can be recovered.
 
     const session = await getActiveWebinarSession();
     const failed = await getFailedWhatsAppRecipients(campaign.id, campaignAudienceSpec(campaign, session?.id ?? null));

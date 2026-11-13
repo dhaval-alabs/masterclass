@@ -117,7 +117,17 @@ export async function drainWhatsAppCampaignQueue(
         recipients: chunk.map(c => ({ phone: c.phone, fullName: c.fullName })),
         headerImageUrl,
       });
-      await markWhatsAppQueueProcessed(chunk.map(c => c.id), 'sent');
+      // Mark each row by what actually happened. Previously the whole chunk was
+      // marked 'sent', so failures (incl. the cut-off after 5 consecutive errors)
+      // and cap-deferred people were silently dropped from the queue for good.
+      // Deferred rows stay pending and resume at the next daily reset.
+      const sentSet = new Set(result.sentPhones ?? []);
+      const failedSet = new Set(result.failedPhones ?? []);
+      const deferredSet = new Set(result.deferredPhones ?? []);
+      const idsFor = (pred: (phone: string) => boolean) => chunk.filter(c => pred(c.phone)).map(c => c.id);
+      await markWhatsAppQueueProcessed(idsFor(p => sentSet.has(p)), 'sent');
+      await markWhatsAppQueueProcessed(idsFor(p => failedSet.has(p)), 'failed');
+      await markWhatsAppQueueProcessed(idsFor(p => !sentSet.has(p) && !failedSet.has(p) && !deferredSet.has(p)), 'skipped');
       sentNow = result.sentCount;
       failedNow = result.failedCount;
       processedNow = chunk.length;

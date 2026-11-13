@@ -161,6 +161,12 @@ export interface WaCampaignResult {
   failedCount: number;
   skippedCount: number;
   errors: string[];
+  // Per-recipient outcomes so the queue can be marked accurately: only `sentPhones`
+  // are done. `failedPhones` are retryable; `deferredPhones` were held back by the
+  // daily cap and must stay pending. Anything else (invalid / opted out) is a skip.
+  sentPhones?: string[];
+  failedPhones?: string[];
+  deferredPhones?: string[];
 }
 
 // Rate-limit constants — tuned to keep the number safe on all Meta tiers.
@@ -328,14 +334,18 @@ export async function sendWhatsAppCampaign(params: {
       logEntries.push({ campaignId, phone: r.phone, recipientName: r.fullName, status: 'skipped', errorDetail: limitError });
     }
     await bulkCreateWhatsAppSendLog(logEntries);
-    return { sentCount: 0, failedCount: 0, skippedCount: skippedCount + activeRecipients.length, errors };
+    return { sentCount: 0, failedCount: 0, skippedCount: skippedCount + activeRecipients.length, errors, sentPhones: [], failedPhones: [], deferredPhones: activeRecipients.map(r => r.phone) };
   }
 
   // Under the cap but too many recipients → send up to the headroom, defer the rest.
   let recipientsToSend = activeRecipients;
+  const deferredPhones: string[] = [];
+  const sentPhones: string[] = [];
+  const failedPhones: string[] = [];
   if (activeRecipients.length > headroom) {
     recipientsToSend = activeRecipients.slice(0, headroom);
     const deferred = activeRecipients.slice(headroom);
+    deferredPhones.push(...deferred.map(r => r.phone));
     const deferMsg = `Daily limit ${dailyLimit} (${dailySentSoFar} already sent today): sending ${headroom} now, ${deferred.length} deferred — reach them with "Send to new" after the daily count resets.`;
     errors.push(deferMsg);
     for (const r of deferred) {
@@ -369,6 +379,7 @@ export async function sendWhatsAppCampaign(params: {
 
     if (result.ok) {
       sentCount++;
+      sentPhones.push(r.phone);
       consecutiveFails = 0;
       logEntries.push({
         campaignId,
@@ -379,6 +390,7 @@ export async function sendWhatsAppCampaign(params: {
       });
     } else {
       failedCount++;
+      failedPhones.push(r.phone);
       consecutiveFails++;
       if (errors.length < 10) errors.push(`${r.phone}: ${result.detail}`);
       logEntries.push({
@@ -405,6 +417,7 @@ export async function sendWhatsAppCampaign(params: {
         for (let j = i + 1; j < recipientsToSend.length; j++) {
           const rem = recipientsToSend[j];
           failedCount++;
+          failedPhones.push(rem.phone);
           logEntries.push({
             campaignId,
             phone: rem.phone,
@@ -436,5 +449,5 @@ export async function sendWhatsAppCampaign(params: {
   // 5. Persist any remaining log entries.
   await flushLog();
 
-  return { sentCount, failedCount, skippedCount, errors };
+  return { sentCount, failedCount, skippedCount, errors, sentPhones, failedPhones, deferredPhones };
 }

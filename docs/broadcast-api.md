@@ -136,7 +136,7 @@ curl -X POST .../api/broadcast -H "Authorization: Bearer $BROADCAST_API_KEY" -H 
 ## Guarantees & limits
 
 - **Opt-outs & dedup:** WhatsApp respects opt-outs and the per-(campaign,phone) log; deduped by last-10 digits.
-- **Daily cap:** WhatsApp obeys `WA_DAILY_LIMIT` (default 900/24h). Overflow stays queued and resumes automatically.
+- **Daily cap:** WhatsApp obeys `WA_DAILY_LIMIT` (default 2,000/24h, capped by Meta tier). Overflow stays queued and resumes automatically.
 - **No double-send:** every send is logged per recipient; the queue marks rows processed.
 - **Email** has no queue — it sends in-request in 100-address batches (same as the admin UI). Very large lists may approach the function time limit; prefer WhatsApp (queued) for the biggest sends, or split the email list.
 - **Scheduling** is WhatsApp + `audience` only (the scheduler recomputes from an audience filter, so it can't replay an explicit recipient list).

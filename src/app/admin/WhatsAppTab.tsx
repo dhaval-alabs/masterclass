@@ -1577,7 +1577,7 @@ export default function WhatsAppTab() {
                         Retry all
                       </button>
                     )}
-                    {(c.status === "failed" || c.status === "partial") && (
+                    {(c.status === "failed" || c.status === "partial" || c.status === "sending") && (
                       <button onClick={() => handleRetryFailed(c.id)} disabled={retryFailedId === c.id}
                         className="flex items-center gap-1 text-xs font-semibold text-orange-700 hover:text-orange-800 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-2 py-1 rounded-md transition-colors shrink-0 disabled:opacity-60"
                         title="Re-send only to recipients who failed in this campaign (still in the audience)">
