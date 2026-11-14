@@ -12,6 +12,7 @@ import {
   releaseWhatsAppQueueRows,
   getWhatsAppCampaignLogCounts,
   getWhatsAppFailureBreakdown,
+  getWhatsAppAccountBlock,
   getWhatsAppDailySentCount,
   getDueScheduledWhatsAppSends,
   markScheduledWhatsAppSend,
@@ -75,7 +76,10 @@ export async function drainWhatsAppCampaignQueue(
   const dailyLimit = await effectiveDailyLimit();
   const sentToday  = await getWhatsAppDailySentCount();
   const headroom   = Math.max(0, dailyLimit - automationReserve(dailyLimit) - sentToday);
-  const claimCount = Math.min(maxToSend, headroom);
+  // Pause (don't burn the queue) while Meta is rejecting everything at account level — e.g. unsettled
+  // payments. Rows stay pending; sending resumes by itself ~30 min after the last such failure.
+  const accountBlock = await getWhatsAppAccountBlock();
+  const claimCount = accountBlock ? 0 : Math.min(maxToSend, headroom);
 
   let sentNow = 0;
   let failedNow = 0;
@@ -153,7 +157,9 @@ export async function drainWhatsAppCampaignQueue(
   // errorSummary: while still draining show progress; when done show real failures.
   let errorSummary: string | null | undefined;
   if (queuedRemaining > 0) {
-    errorSummary = headroom <= 0
+    errorSummary = accountBlock
+      ? `PAUSED — Meta is rejecting messages at account level (${accountBlock.slice(0, 160)}). ${queuedRemaining} queued; fix it in Meta Business Manager and sending resumes automatically.`
+      : headroom <= 0
       ? `Today's broadcast share of the daily limit is used (${dailyLimit - automationReserve(dailyLimit)} of ${dailyLimit}; the rest is kept for automations) — ${queuedRemaining} queued, continuing automatically at ${dayStartLabel()}.`
       : `${queuedRemaining} queued — sending in the background.`;
   } else {

@@ -4389,6 +4389,29 @@ export async function markWhatsAppQueueProcessed(ids: string[], status: 'sent' |
   if (error) throw error;
 }
 
+/**
+ * Circuit breaker for account-level WhatsApp blocks. Meta ACCEPTS a send and only later (via the
+ * webhook) reports it undeliverable — e.g. 131042 "unsettled payments" — so the send call looks fine
+ * while every message is dead. If several recent sends were flipped to failed with an account-level
+ * (config) error and nothing has been delivered/read since, return that error so callers pause
+ * instead of burning the whole queue. Returns null when sending looks healthy.
+ */
+export async function getWhatsAppAccountBlock(windowMin = 30): Promise<string | null> {
+  const since = new Date(Date.now() - windowMin * 60_000).toISOString();
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_log')
+    .select('status, error_detail')
+    .gte('sent_at', since)
+    .in('status', ['failed', 'delivered', 'read'])
+    .limit(300);
+  if (error || !data) return null;
+  if (data.some(r => r.status === 'delivered' || r.status === 'read')) return null; // something got through
+  const blocked = data.filter(r => r.status === 'failed' && classifyWaError(r.error_detail as string | null) === 'config');
+  if (blocked.length < 5) return null;
+  return (blocked[0].error_detail as string | null) ?? 'account-level WhatsApp error';
+}
+
 /** Hand claimed rows back to 'pending' (e.g. held back by the daily cap) so a later tick sends them. */
 export async function releaseWhatsAppQueueRows(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
