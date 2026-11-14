@@ -1,6 +1,6 @@
 export const maxDuration = 300; // inline chunk; the cron drains the rest
 import { NextRequest, NextResponse } from 'next/server';
-import { getWhatsAppCampaignById, getFailedWhatsAppRecipients, getActiveWebinarSession, campaignAudienceSpec } from '@/lib/db';
+import { getWhatsAppCampaignById, getFailedWhatsAppRecipients, getWhatsAppFailureBreakdown, getActiveWebinarSession, campaignAudienceSpec } from '@/lib/db';
 import { startCampaignSend } from '@/lib/whatsapp-campaign';
 
 // POST /api/admin/whatsapp/campaigns/:id/retry-failed
@@ -23,13 +23,17 @@ export async function POST(
     const session = await getActiveWebinarSession();
     const failed = await getFailedWhatsAppRecipients(campaign.id, campaignAudienceSpec(campaign, session?.id ?? null));
 
+    const bd = await getWhatsAppFailureBreakdown(campaign.id);
+    const permanent = bd.total - bd.retryable;
+    const note = permanent > 0 ? ` ${permanent} not retried — Meta won't deliver to them (not on WhatsApp / marketing-filtered).` : '';
+
     if (failed.length === 0) {
-      return NextResponse.json({ success: true, sentCount: 0, message: 'No failed recipients to retry (everyone failed has either succeeded since or left the audience).' });
+      return NextResponse.json({ success: true, sentCount: 0, message: `No retryable failures.${note}` });
     }
 
     // Re-send only the failed people; total stays (they're already counted).
     const r = await startCampaignSend(campaign, failed, { headerImageUrl: overrideImage, totalMode: 'keep' });
-    return NextResponse.json({ success: r.status !== 'failed', sentCount: r.sentNow, queuedRemaining: r.queuedRemaining, message: r.message });
+    return NextResponse.json({ success: r.status !== 'failed', sentCount: r.sentNow, queuedRemaining: r.queuedRemaining, message: r.message + note });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
@@ -46,7 +50,8 @@ export async function GET(
     if (!campaign) return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
     const session = await getActiveWebinarSession();
     const failed = await getFailedWhatsAppRecipients(campaign.id, campaignAudienceSpec(campaign, session?.id ?? null));
-    return NextResponse.json({ failedCount: failed.length, samples: failed.slice(0, 5).map(r => ({ phone: r.phone, name: r.fullName })) });
+    const breakdown = await getWhatsAppFailureBreakdown(campaign.id);
+    return NextResponse.json({ failedCount: failed.length, breakdown, samples: failed.slice(0, 5).map(r => ({ phone: r.phone, name: r.fullName })) });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

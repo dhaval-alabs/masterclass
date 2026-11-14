@@ -1,4 +1,5 @@
 import { getServiceClient } from './supabase';
+import { classifyWaError, isRetryable, waErrorCode, WA_ERROR_LABEL, type WaErrorKind } from './wa-errors';
 import { waDayStart, effectiveDailyLimit } from './wa-limits';
 
 export interface SpeakerSettings {
@@ -4432,6 +4433,18 @@ export async function getUnsentWhatsAppRegistrations(
     .in('status', ['sent', 'delivered', 'read'])
     .order('id', { ascending: true }));
   const sentPhones = new Set(sent.map(r => phoneKey(r.phone)));
+  // Also leave out people who failed permanently (not on WhatsApp / Meta-filtered):
+  // "Send to new" must not keep re-trying someone who can never receive it.
+  const hardFailed = await fetchAllRows<{ phone: string; error_detail: string | null }>(() => client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_log')
+    .select('phone,error_detail')
+    .eq('campaign_id', campaignId)
+    .eq('status', 'failed')
+    .order('id', { ascending: true }));
+  for (const r of hardFailed) {
+    if (!isRetryable(classifyWaError(r.error_detail))) sentPhones.add(phoneKey(r.phone));
+  }
 
   const all = await recipientsFor(audience, sessionId, 'whatsapp');
   return all.filter(r => r.phone?.trim() && !sentPhones.has(phoneKey(r.phone)));
@@ -4445,10 +4458,10 @@ export async function getFailedWhatsAppRecipients(
   audience: AudienceInput,
   sessionId?: string | null,
 ): Promise<EmailRecipient[]> {
-  const data = await fetchAllRows<{ phone: string; status: string }>(() => client()
+  const data = await fetchAllRows<{ phone: string; status: string; error_detail: string | null }>(() => client()
     .schema('excel_to_ai')
     .from('whatsapp_send_log')
-    .select('phone,status')
+    .select('phone,status,error_detail')
     .eq('campaign_id', campaignId)
     .order('id', { ascending: true }));
 
@@ -4462,8 +4475,52 @@ export async function getFailedWhatsAppRecipients(
   }
   const failedPhones = new Set([...best.entries()].filter(([, s]) => s === 'failed').map(([k]) => k));
 
+  // Don't retry people whose failure is permanent / Meta-filtered — re-sending
+  // can't succeed and just burns quality rating. (Judged on their latest failure.)
+  const lastError = new Map<string, string | null>();
+  for (const r of data) if (r.status === 'failed') lastError.set(norm(r.phone as string), r.error_detail);
+  for (const k of [...failedPhones]) {
+    if (!isRetryable(classifyWaError(lastError.get(k)))) failedPhones.delete(k);
+  }
+
   const all = await recipientsFor(audience, sessionId, 'whatsapp');
   return all.filter(r => r.phone?.trim() && failedPhones.has(norm(r.phone)));
+}
+
+/** Failed people in a campaign grouped by Meta error kind/code — the "why" behind the failed count. */
+export async function getWhatsAppFailureBreakdown(campaignId: string): Promise<{
+  total: number;
+  retryable: number;
+  groups: { kind: WaErrorKind; label: string; code: number | null; count: number; sample: string | null }[];
+}> {
+  const data = await fetchAllRows<{ phone: string; status: string; error_detail: string | null }>(() => client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_log')
+    .select('phone,status,error_detail')
+    .eq('campaign_id', campaignId)
+    .order('id', { ascending: true }));
+  const rank: Record<string, number> = { read: 4, delivered: 3, sent: 2, failed: 1, skipped: 0 };
+  const best = new Map<string, { status: string; err: string | null }>();
+  for (const r of data) {
+    const k = phoneKey(r.phone); if (!k) continue;
+    const cur = best.get(k);
+    if (!cur || (rank[r.status] ?? -1) > (rank[cur.status] ?? -1)) best.set(k, { status: r.status, err: r.error_detail });
+    else if (cur.status === 'failed' && r.status === 'failed' && r.error_detail) cur.err = r.error_detail;
+  }
+  const groups = new Map<string, { kind: WaErrorKind; label: string; code: number | null; count: number; sample: string | null }>();
+  let total = 0, retryable = 0;
+  for (const { status, err } of best.values()) {
+    if (status !== 'failed') continue;
+    total++;
+    const kind = classifyWaError(err);
+    if (isRetryable(kind)) retryable++;
+    const code = waErrorCode(err);
+    const key = `${kind}:${code ?? ''}`;
+    const g = groups.get(key) ?? { kind, label: WA_ERROR_LABEL[kind], code, count: 0, sample: err };
+    g.count++;
+    groups.set(key, g);
+  }
+  return { total, retryable, groups: [...groups.values()].sort((a, b) => b.count - a.count) };
 }
 
 // Count of UNIQUE phones successfully sent in the current sending day (from 09:00 IST). Deduped by phone so that

@@ -4,6 +4,7 @@
 // is reported via the messages.statuses webhook, which we don't subscribe to.
 // The returned `status` here therefore reflects send-API outcome, not delivery.
 
+import { classifyWaError, isRecipientLevelError } from './wa-errors';
 import {
   getWhatsAppOptoutPhones,
   getWhatsAppDailySentCount,
@@ -391,7 +392,12 @@ export async function sendWhatsAppCampaign(params: {
     } else {
       failedCount++;
       failedPhones.push(r.phone);
-      consecutiveFails++;
+      // Only failures that could mean "something is broken for everyone" count
+      // toward the abort. A person whose number isn't on WhatsApp, or whom Meta
+      // declined to message, says nothing about the next recipient — they used to
+      // trip the abort and write off the rest of the chunk as failed unsent.
+      if (isRecipientLevelError(classifyWaError(result.detail))) consecutiveFails = 0;
+      else consecutiveFails++;
       if (errors.length < 10) errors.push(`${r.phone}: ${result.detail}`);
       logEntries.push({
         campaignId,

@@ -10,6 +10,7 @@ import {
   countWhatsAppQueueTotal,
   markWhatsAppQueueProcessed,
   getWhatsAppCampaignLogCounts,
+  getWhatsAppFailureBreakdown,
   getWhatsAppDailySentCount,
   getDueScheduledWhatsAppSends,
   markScheduledWhatsAppSend,
@@ -154,9 +155,13 @@ export async function drainWhatsAppCampaignQueue(
       ? `Today's broadcast share of the daily limit is used (${dailyLimit - automationReserve(dailyLimit)} of ${dailyLimit}; the rest is kept for automations) — ${queuedRemaining} queued, continuing automatically at ${dayStartLabel()}.`
       : `${queuedRemaining} queued — sending in the background.`;
   } else {
-    errorSummary = counts.failed > 0
-      ? (lastErrors.length ? lastErrors.slice(0, 3).join(' | ') : `${counts.failed} recipient(s) failed`)
-      : null;
+    // Say WHY, with counts ("2,800 × code 131049 …"), not just how many.
+    if (counts.failed > 0) {
+      const bd = await getWhatsAppFailureBreakdown(campaignId);
+      errorSummary = bd.groups.length
+        ? bd.groups.slice(0, 3).map(g => `${g.count} × ${g.code ? `code ${g.code}: ` : ''}${g.label}`).join(' | ')
+        : (lastErrors.length ? lastErrors.slice(0, 3).join(' | ') : `${counts.failed} recipient(s) failed`);
+    } else errorSummary = null;
   }
 
   await updateWhatsAppCampaign(campaignId, {
