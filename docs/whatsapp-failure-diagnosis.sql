@@ -10,7 +10,7 @@ with ranked as (
          ) rn
   from excel_to_ai.whatsapp_send_log
 )
-select c.name as campaign,
+select c.template_name as campaign,
        coalesce(substring(r.error_detail from 'code=(\d+)'), left(r.error_detail, 60)) as error_code,
        count(*) as people,
        min(r.error_detail) as sample_message
@@ -20,7 +20,7 @@ group by 1, 2
 order by people desc;
 
 -- 2) Queue state per campaign (confirms the queue is drained and what is pending).
-select c.name, q.status, count(*)
+select c.template_name, q.status, count(*)
 from excel_to_ai.whatsapp_send_queue q
 join excel_to_ai.whatsapp_campaigns c on c.id = q.campaign_id
 group by 1, 2 order by 1, 2;
