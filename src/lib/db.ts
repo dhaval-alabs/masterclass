@@ -4335,7 +4335,7 @@ export async function countPendingWhatsAppQueue(campaignId: string): Promise<num
     .from('whatsapp_send_queue')
     .select('*', { count: 'exact', head: true })
     .eq('campaign_id', campaignId)
-    .eq('status', 'pending');
+    .in('status', ['pending', 'processing']); // in-flight rows are still work
   if (error) throw error;
   return count ?? 0;
 }
@@ -4358,6 +4358,14 @@ export async function claimPendingWhatsAppQueue(
   limit: number,
 ): Promise<{ id: string; phone: string; fullName: string }[]> {
   if (limit <= 0) return [];
+  // Atomic claim (migration 0038): flips rows to 'processing' so overlapping drains
+  // (cron tick + inline send + a slow previous tick) can never get the same people.
+  const claimed = await client().schema('excel_to_ai').rpc('claim_whatsapp_queue', { p_campaign_id: campaignId, p_limit: limit });
+  if (!claimed.error) {
+    return ((claimed.data ?? []) as { id: string; phone: string; recipient_name: string | null }[])
+      .map(r => ({ id: r.id, phone: r.phone, fullName: r.recipient_name ?? '' }));
+  }
+  console.error('[WhatsApp] claim_whatsapp_queue unavailable — run migration 0038. Falling back to the unsafe select:', claimed.error.message);
   const { data, error } = await client()
     .schema('excel_to_ai')
     .from('whatsapp_send_queue')
@@ -4377,6 +4385,17 @@ export async function markWhatsAppQueueProcessed(ids: string[], status: 'sent' |
     .schema('excel_to_ai')
     .from('whatsapp_send_queue')
     .update({ status, processed_at: new Date().toISOString() })
+    .in('id', ids);
+  if (error) throw error;
+}
+
+/** Hand claimed rows back to 'pending' (e.g. held back by the daily cap) so a later tick sends them. */
+export async function releaseWhatsAppQueueRows(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const { error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_queue')
+    .update({ status: 'pending', claimed_at: null })
     .in('id', ids);
   if (error) throw error;
 }

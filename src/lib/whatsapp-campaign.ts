@@ -9,6 +9,7 @@ import {
   countPendingWhatsAppQueue,
   countWhatsAppQueueTotal,
   markWhatsAppQueueProcessed,
+  releaseWhatsAppQueueRows,
   getWhatsAppCampaignLogCounts,
   getWhatsAppFailureBreakdown,
   getWhatsAppDailySentCount,
@@ -129,6 +130,7 @@ export async function drainWhatsAppCampaignQueue(
       await markWhatsAppQueueProcessed(idsFor(p => sentSet.has(p)), 'sent');
       await markWhatsAppQueueProcessed(idsFor(p => failedSet.has(p)), 'failed');
       await markWhatsAppQueueProcessed(idsFor(p => !sentSet.has(p) && !failedSet.has(p) && !deferredSet.has(p)), 'skipped');
+      await releaseWhatsAppQueueRows(idsFor(p => deferredSet.has(p)));
       sentNow = result.sentCount;
       failedNow = result.failedCount;
       processedNow = chunk.length;
