@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { addRegistration, markRegistrationVerified, getAutoSendCampaign, scheduleEmailForRecipient, updateZoomRegistration, saveConversation, scheduleWhatsAppForRecipient, cancelPendingScheduledWhatsApp, getWebinarConfig, scheduleWebinarReminders } from '@/lib/db';
 import { registerWebinarParticipant } from '@/lib/zoom';
 import { verifyOtpCode } from '@/lib/otpService';
+import { syncRegistration } from '@/lib/mindbird-sync';
 import { scoreAndSave, type ConversationTurn } from '@/lib/qualify';
 import { lsqPostWithRetry } from '@/lib/lsqClient';
 
@@ -125,11 +126,9 @@ export async function POST(req: NextRequest) {
       status: 'Verified',
       city,
     };
-    if (registrationId && typeof registrationId === 'string') {
-      await markRegistrationVerified(registrationId, verifiedPayload);
-    } else {
-      await addRegistration(verifiedPayload);
-    }
+    const verifiedReg = registrationId && typeof registrationId === 'string'
+      ? await markRegistrationVerified(registrationId, verifiedPayload)
+      : await addRegistration(verifiedPayload);
 
     // 5. Persist conversation + score lead with Gemini — server-side so it
     // completes even if the browser navigates away after OTP submission.
@@ -196,6 +195,10 @@ export async function POST(req: NextRequest) {
       updateZoomRegistration(registrationId, !zoomError, zoomJoinUrl)
         .catch(e => console.error('[Zoom] DB status save failed:', e));
     }
+
+    // Mindbird: the lead is verified now, with its Zoom join link, and the
+    // event its welcome / reminder rules act on. Off unless MINDBIRD_SYNC_ENABLED=1.
+    after(() => syncRegistration(verifiedReg, { event: 'mc_verified', joinUrl: zoomJoinUrl || null }));
 
     // 6. Queue in the scheduled-send system (delivery time = campaign delay).
     getAutoSendCampaign('verified').then(async campaign => {

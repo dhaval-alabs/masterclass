@@ -11,7 +11,8 @@
 // If your S2S app doesn't have it, the Reports API returns "4711 missing
 // scopes". Add it in Zoom Marketplace → Scopes, then re-publish.
 
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
+import { syncAttendanceBulk } from '@/lib/mindbird-sync';
 import { cookies } from 'next/headers';
 import { fetchWebinarAttendees } from '@/lib/zoom';
 import { sendMetaCapiEvent } from '@/lib/meta';
@@ -173,6 +174,8 @@ export async function POST(request: Request) {
     // 4. Process each registration. We update DB sequentially to keep error
     // handling simple — the typical webinar has ≤500 attendees, so this is
     // fine. Could parallelize if needed later.
+    // Whose attendance this run changed — sent to Mindbird after the response.
+    const changed: typeof registrations = [];
     for (const reg of registrations) {
       const matched = attendeesByEmail.get(reg.email.toLowerCase());
 
@@ -181,6 +184,7 @@ export async function POST(request: Request) {
         if (reg.attended !== false) {
           try {
             await updateRegistrationAttendance({ id: reg.id, attended: false });
+            changed.push({ ...reg, attended: false });
             // First time marking this person a no-show → queue the follow-up WA.
             scheduleWhatsAppForRecipient({ trigger: 'noshow', registrationId: reg.id, phone: reg.phone, recipientName: reg.fullName })
               .catch((e: unknown) => console.error('[wa auto-send] noshow queue failed:', e));
@@ -200,7 +204,7 @@ export async function POST(request: Request) {
           attendedAt: matched.joinTime,
           attendanceDurationMin: matched.durationMin,
         });
-        if (wasNewlyMarked) newlyMarked++;
+        if (wasNewlyMarked) { newlyMarked++; changed.push({ ...reg, attended: true }); }
       } catch (err) {
         errors.push(`[attended update ${reg.email}] ${err instanceof Error ? err.message : err}`);
         continue;
@@ -274,6 +278,10 @@ export async function POST(request: Request) {
       lsqUpdated,
       errorSummary: errors.length ? errors.slice(0, 10).join(' | ') : null,
     });
+
+    // Mindbird: the changed rows' attendance, plus attended / no-show events for
+    // a session in the last 7 days. After the response; off unless enabled.
+    if (changed.length) after(() => syncAttendanceBulk(changed, targetSession));
 
     return NextResponse.json({
       success: true,

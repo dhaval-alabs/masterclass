@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
+import { syncRegistration } from '@/lib/mindbird-sync';
 import crypto from 'crypto';
 import {
   findRegistrationByEmailOrPhone,
@@ -279,6 +280,16 @@ export async function POST(req: NextRequest) {
         fbclid: typeof body.fbclid === 'string' ? body.fbclid : null,
       });
       registrationId = created.id;
+
+      // Mindbird (the organisation's WhatsApp system): the new lead, unverified,
+      // into the Masterclass batches, and the event its rules act on. Off unless
+      // MINDBIRD_SYNC_ENABLED=1; after() so the response never waits on it.
+      const utm = {
+        source: typeof body.utm_source === 'string' && body.utm_source.trim().toLowerCase() !== 'direct' ? body.utm_source.trim() : null,
+        medium: typeof body.utm_medium === 'string' ? body.utm_medium.trim() : null,
+        campaign: typeof body.utm_campaign === 'string' ? body.utm_campaign.trim() : null,
+      };
+      after(() => syncRegistration(created, { event: 'mc_registered', utm }));
 
       getAutoSendCampaign('unverified').then(async campaign => {
         if (!campaign) return;

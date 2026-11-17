@@ -1,4 +1,5 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
+import { syncRegistration } from '@/lib/mindbird-sync';
 import { cookies } from 'next/headers';
 import { addRegistration, getRegistrationsPaginated, getUniqueRegistrationsPaginated, getRegistrationStats, getActiveWebinarSession, getWebinarSessionById } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
@@ -67,6 +68,7 @@ export async function POST(request: Request) {
       status: body.status,
       city: body.city
     });
+    after(() => syncRegistration(newReg));   // Mindbird: details only, no event
     return NextResponse.json({ success: true, registration: newReg });
   } catch (error) {
     console.error('[Register POST] error:', error);
