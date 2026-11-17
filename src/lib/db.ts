@@ -4408,8 +4408,31 @@ export async function getWhatsAppAccountBlock(windowMin = 30): Promise<string | 
   if (error || !data) return null;
   if (data.some(r => r.status === 'delivered' || r.status === 'read')) return null; // something got through
   const blocked = data.filter(r => r.status === 'failed' && classifyWaError(r.error_detail as string | null) === 'config');
-  if (blocked.length < 5) return null;
-  return (blocked[0].error_detail as string | null) ?? 'account-level WhatsApp error';
+  if (blocked.length >= 5) return (blocked[0].error_detail as string | null) ?? 'account-level WhatsApp error';
+  return getWhatsAppSilentNonDelivery();
+}
+
+/**
+ * The quieter failure mode: Meta accepts every message and then never reports it delivered — no
+ * error at all. On 15-16 Nov 2026, 1,437 broadcast messages stayed 'sent' forever (1 delivered)
+ * while the queue kept spending the daily allowance on them. Normal sends get their first
+ * delivery receipts within minutes. So: if a meaningful batch sent 2-6 hours ago has not produced
+ * a single delivered/read/failed status, treat the account as blocked and pause.
+ */
+async function getWhatsAppSilentNonDelivery(): Promise<string | null> {
+  const from = new Date(Date.now() - 6 * 60 * 60_000).toISOString();
+  const to   = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+  const { data, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_log')
+    .select('status')
+    .gte('sent_at', from)
+    .lte('sent_at', to)
+    .in('status', ['sent', 'delivered', 'read'])
+    .limit(1000);
+  if (error || !data || data.length < 50) return null;
+  if (data.some(r => r.status !== 'sent')) return null;
+  return `Meta accepted ${data.length} messages 2-6 hours ago but delivered none of them — check WhatsApp Manager (payment, account status, quality) before sending more`;
 }
 
 /** Hand claimed rows back to 'pending' (e.g. held back by the daily cap) so a later tick sends them. */
