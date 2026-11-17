@@ -4489,15 +4489,29 @@ export async function cancelPendingWhatsAppQueue(campaignId: string): Promise<nu
 }
 
 /** Distinct campaign IDs that still have pending queue rows (for the cron). */
-export async function getCampaignIdsWithPendingQueue(limit = 500): Promise<string[]> {
-  const { data, error } = await client()
+export async function getCampaignIdsWithPendingQueue(limit = 200): Promise<string[]> {
+  // Ask per CAMPAIGN, not per queue row. This used to read the first 500 pending queue rows and
+  // collect their campaign ids — so one campaign with thousands of queued people (the 6,000-person
+  // retarget) filled all 500 rows and every smaller campaign behind it (the unverified nudge, 34
+  // people) was never seen by the cron at all.
+  const { data: camps, error } = await client()
     .schema('excel_to_ai')
-    .from('whatsapp_send_queue')
-    .select('campaign_id')
-    .in('status', ['pending', 'processing']) // 'processing' rows abandoned by a killed drain are recovered by the claim
+    .from('whatsapp_campaigns')
+    .select('id')
+    .order('created_at', { ascending: false })
     .limit(limit);
   if (error) throw error;
-  return [...new Set((data ?? []).map(r => r.campaign_id as string))];
+  const ids = (camps ?? []).map(c => c.id as string);
+  const withWork = await Promise.all(ids.map(async id => {
+    const { count } = await client()
+      .schema('excel_to_ai')
+      .from('whatsapp_send_queue')
+      .select('*', { count: 'exact', head: true })
+      .eq('campaign_id', id)
+      .in('status', ['pending', 'processing']); // 'processing' rows abandoned by a killed drain are recovered by the claim
+    return (count ?? 0) > 0 ? id : null;
+  }));
+  return withWork.filter((id): id is string => id !== null);
 }
 
 // Recipients in the audience who have NOT already been logged for this WhatsApp
