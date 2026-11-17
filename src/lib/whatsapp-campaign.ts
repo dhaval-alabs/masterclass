@@ -85,7 +85,10 @@ export async function drainWhatsAppCampaignQueue(
   const unverifiedHold = campaign.audience === 'unverified'
     ? 0
     : Math.min(unverifiedReserve(), await countPendingUnverifiedQueue(campaignId));
-  const headroom   = Math.max(0, dailyLimit - automationReserve(dailyLimit) - sentToday - unverifiedHold);
+  // The automation reserve exists to protect nudges to unverified registrants — so an
+  // unverified-audience campaign may use it too; only other broadcasts must leave it alone.
+  const reserve    = campaign.audience === 'unverified' ? 0 : automationReserve(dailyLimit);
+  const headroom   = Math.max(0, dailyLimit - reserve - sentToday - unverifiedHold);
   // Pause (don't burn the queue) while Meta is rejecting everything at account level — e.g. unsettled
   // payments. Rows stay pending; sending resumes by itself ~30 min after the last such failure.
   const accountBlock = await getWhatsAppAccountBlock();
