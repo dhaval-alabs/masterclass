@@ -12,7 +12,7 @@ with best as (
          right(regexp_replace(l.phone,'\D','','g'),10) as k,
          max(case l.status when 'read' then 4 when 'delivered' then 3 when 'sent' then 2 when 'failed' then 1 else 0 end) as r,
          max(l.sent_at) as last_at,
-         bool_or(l.status = 'failed' and l.error_detail ~ 'code=(131026|131021|131030|1013|131049|130472)\\D') as permanent
+         bool_or(l.status = 'failed' and l.error_detail ~ 'code=(131026|131021|131030|1013|131049|130472)\D') as permanent
   from excel_to_ai.whatsapp_send_log l
   join excel_to_ai.whatsapp_campaigns c on c.id = l.campaign_id
   where c.template_name = 'nov_22_retarget'
@@ -33,7 +33,7 @@ with best as (
          right(regexp_replace(l.phone,'\D','','g'),10) as k,
          max(case l.status when 'read' then 4 when 'delivered' then 3 when 'sent' then 2 when 'failed' then 1 else 0 end) as r,
          max(l.sent_at) as last_at,
-         bool_or(l.status = 'failed' and l.error_detail ~ 'code=(131026|131021|131030|1013|131049|130472)\\D') as permanent
+         bool_or(l.status = 'failed' and l.error_detail ~ 'code=(131026|131021|131030|1013|131049|130472)\D') as permanent
   from excel_to_ai.whatsapp_send_log l
   join excel_to_ai.whatsapp_campaigns c on c.id = l.campaign_id
   where c.template_name = 'nov_22_retarget'
