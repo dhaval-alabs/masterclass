@@ -1585,7 +1585,7 @@ export default function WhatsAppTab() {
                         Retry failed
                       </button>
                     )}
-                    {(c.status === "sent" || c.status === "partial" || c.status === "failed") && (
+                    {(c.status === "sent" || c.status === "partial" || c.status === "failed" || c.status === "sending") && (
                       <button onClick={() => handleSendNew(c.id)} disabled={sendingNewId === c.id}
                         className="flex items-center gap-1 text-xs font-semibold text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-1 rounded-md transition-colors shrink-0 disabled:opacity-60"
                         title="Send only to registrants who haven't been successfully reached yet (new + previously failed)">

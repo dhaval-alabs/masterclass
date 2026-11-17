@@ -1,6 +1,6 @@
 export const maxDuration = 300; // inline chunk; the cron drains the rest
 import { NextRequest, NextResponse } from 'next/server';
-import { getWhatsAppCampaignById, getUnsentWhatsAppRegistrations, getActiveWebinarSession, campaignAudienceSpec } from '@/lib/db';
+import { getWhatsAppCampaignById, getUnsentWhatsAppRegistrations, getQueuedWhatsAppPhoneKeys, getActiveWebinarSession, campaignAudienceSpec } from '@/lib/db';
 import { startCampaignSend } from '@/lib/whatsapp-campaign';
 
 // POST /api/admin/whatsapp/campaigns/:id/send-new
@@ -17,13 +17,17 @@ export async function POST(
   try {
     const campaign = await getWhatsAppCampaignById(id);
     if (!campaign) return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
-    if (campaign.status === 'sending') return NextResponse.json({ error: 'Campaign is already sending' }, { status: 409 });
+    // Allowed while 'sending': new registrants keep arriving during a multi-day drain (the
+    // unverified nudge especially) and shouldn't wait for it to finish. People already waiting in
+    // the queue are left out, so nobody is added twice.
 
     const session = await getActiveWebinarSession();
-    const newRecipients = await getUnsentWhatsAppRegistrations(campaign.id, campaignAudienceSpec(campaign, session?.id ?? null));
+    const queued = await getQueuedWhatsAppPhoneKeys(campaign.id);
+    const newRecipients = (await getUnsentWhatsAppRegistrations(campaign.id, campaignAudienceSpec(campaign, session?.id ?? null)))
+      .filter(r => !queued.has(r.phone.replace(/\D/g, '').slice(-10)));
 
     if (newRecipients.length === 0) {
-      return NextResponse.json({ success: true, sentCount: 0, message: 'No new recipients — everyone in this audience has already received this campaign.' });
+      return NextResponse.json({ success: true, sentCount: 0, message: queued.size ? `No new recipients — everyone else has received it or is already queued (${queued.size} waiting).` : 'No new recipients — everyone in this audience has already received this campaign.' });
     }
 
     // Append the new recipients to the campaign total and send via the queue.
@@ -45,7 +49,9 @@ export async function GET(
     if (!campaign) return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
 
     const session = await getActiveWebinarSession();
-    const newRecipients = await getUnsentWhatsAppRegistrations(campaign.id, campaignAudienceSpec(campaign, session?.id ?? null));
+    const queued = await getQueuedWhatsAppPhoneKeys(campaign.id);
+    const newRecipients = (await getUnsentWhatsAppRegistrations(campaign.id, campaignAudienceSpec(campaign, session?.id ?? null)))
+      .filter(r => !queued.has(r.phone.replace(/\D/g, '').slice(-10)));
 
     return NextResponse.json({
       newCount: newRecipients.length,

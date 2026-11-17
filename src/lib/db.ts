@@ -4459,6 +4459,18 @@ export async function countPendingUnverifiedQueue(excludeCampaignId: string): Pr
   return count ?? 0;
 }
 
+/** Phones (last 10 digits) still waiting in a campaign's queue — used so "Send to new" never re-adds them. */
+export async function getQueuedWhatsAppPhoneKeys(campaignId: string): Promise<Set<string>> {
+  const rows = await fetchAllRows<{ phone: string }>(() => client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_queue')
+    .select('phone')
+    .eq('campaign_id', campaignId)
+    .in('status', ['pending', 'processing'])
+    .order('id', { ascending: true }));
+  return new Set(rows.map(r => phoneKey(r.phone)));
+}
+
 /** Hand claimed rows back to 'pending' (e.g. held back by the daily cap) so a later tick sends them. */
 export async function releaseWhatsAppQueueRows(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
