@@ -4435,6 +4435,30 @@ async function getWhatsAppSilentNonDelivery(): Promise<string | null> {
   return `Meta accepted ${data.length} messages 2-6 hours ago but delivered none of them — check WhatsApp Manager (payment, account status, quality) before sending more`;
 }
 
+/**
+ * Pending queue rows belonging to OTHER manual campaigns aimed at unverified registrants. Those
+ * people are the ones a masterclass can still convert, so a big retarget must not take the whole
+ * daily allowance while they wait (see unverifiedReserve in whatsapp-campaign.ts).
+ */
+export async function countPendingUnverifiedQueue(excludeCampaignId: string): Promise<number> {
+  const { data: camps, error: e1 } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_campaigns')
+    .select('id')
+    .eq('audience', 'unverified')
+    .eq('auto_send_enabled', false)
+    .neq('id', excludeCampaignId);
+  if (e1 || !camps || camps.length === 0) return 0;
+  const { count, error } = await client()
+    .schema('excel_to_ai')
+    .from('whatsapp_send_queue')
+    .select('*', { count: 'exact', head: true })
+    .in('campaign_id', camps.map(c => c.id as string))
+    .in('status', ['pending', 'processing']);
+  if (error) return 0;
+  return count ?? 0;
+}
+
 /** Hand claimed rows back to 'pending' (e.g. held back by the daily cap) so a later tick sends them. */
 export async function releaseWhatsAppQueueRows(ids: string[]): Promise<void> {
   if (ids.length === 0) return;

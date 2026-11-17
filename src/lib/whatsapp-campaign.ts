@@ -13,6 +13,7 @@ import {
   getWhatsAppCampaignLogCounts,
   getWhatsAppFailureBreakdown,
   getWhatsAppAccountBlock,
+  countPendingUnverifiedQueue,
   getWhatsAppDailySentCount,
   getDueScheduledWhatsAppSends,
   markScheduledWhatsAppSend,
@@ -30,6 +31,10 @@ import { effectiveDailyLimit, automationReserve, dayStartLabel } from './wa-limi
 // Pro (300s) to e.g. 250 for faster drains. Sends larger than this spill to the
 // queue and drain over subsequent cron ticks.
 const CHUNK = Math.max(1, parseInt(process.env.WA_SEND_CHUNK ?? '80', 10));
+function unverifiedReserve(): number {
+  const n = parseInt(process.env.WA_UNVERIFIED_RESERVE ?? '500', 10);
+  return Number.isFinite(n) && n >= 0 ? n : 500;
+}
 const INLINE_CHUNK = CHUNK; // attempted within the request that triggered the send
 const CRON_CHUNK   = CHUNK; // attempted per campaign per cron tick
 
@@ -75,7 +80,12 @@ export async function drainWhatsAppCampaignQueue(
   // later tick once the daily count resets.
   const dailyLimit = await effectiveDailyLimit();
   const sentToday  = await getWhatsAppDailySentCount();
-  const headroom   = Math.max(0, dailyLimit - automationReserve(dailyLimit) - sentToday);
+  // Unverified-audience campaigns get first claim on up to WA_UNVERIFIED_RESERVE (default 500) of
+  // the day's broadcast allowance: other campaigns leave room for whatever they still have queued.
+  const unverifiedHold = campaign.audience === 'unverified'
+    ? 0
+    : Math.min(unverifiedReserve(), await countPendingUnverifiedQueue(campaignId));
+  const headroom   = Math.max(0, dailyLimit - automationReserve(dailyLimit) - sentToday - unverifiedHold);
   // Pause (don't burn the queue) while Meta is rejecting everything at account level — e.g. unsettled
   // payments. Rows stay pending; sending resumes by itself ~30 min after the last such failure.
   const accountBlock = await getWhatsAppAccountBlock();
