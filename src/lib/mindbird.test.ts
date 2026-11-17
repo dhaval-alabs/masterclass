@@ -31,7 +31,9 @@ test("a lead becomes a contact with masterclass tags, batches and mc_ details", 
   assert.equal(row.attributes.mc_session_at, "2026-11-22T13:30:00.000Z");
   assert.equal(row.attributes.mc_city, "Pune");
   assert.equal(row.attributes.mc_utm_source, "meta");
-  assert.equal("mc_join_url" in row.attributes, false);   // empty values are left out
+  // A session's join link is always sent, blank when there is none, so a
+  // previous session's link never stays on the contact.
+  assert.equal(row.attributes.mc_join_url, "");
   assert.equal("mc_utm_medium" in row.attributes, false);
 });
 
@@ -86,4 +88,13 @@ test("Mindbird hanging or failing never throws and never holds the registration"
   finally { globalThis.fetch = realFetch; console.error = realError; }
   assert.ok(Date.now() - t0 < 1000);
   assert.ok(logged.length >= 1);
+});
+
+test("attendance events only for a session that started in the last 7 days", async () => {
+  const { attendanceEventAllowed } = await import("./mindbird.ts");
+  const now = Date.parse("2026-11-23T10:00:00Z");
+  assert.equal(attendanceEventAllowed({ ...session, datetimeUtc: "2026-11-22T13:30:00Z" }, now), true);
+  assert.equal(attendanceEventAllowed({ ...session, datetimeUtc: "2026-11-10T13:30:00Z" }, now), false);
+  assert.equal(attendanceEventAllowed({ ...session, datetimeUtc: "2026-11-30T13:30:00Z" }, now), false);   // not happened yet
+  assert.equal(attendanceEventAllowed({ ...session, datetimeUtc: null }, now), false);
 });

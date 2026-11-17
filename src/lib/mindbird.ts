@@ -83,10 +83,12 @@ export function buildContactRow(lead: McLead, session: McSession): McContactRow 
     mc_utm_medium: lead.utm?.medium ?? "",
     mc_utm_campaign: lead.utm?.campaign ?? "",
   };
-  // Mindbird keeps at most 500 characters per value; empties are left out so a
-  // later push never blanks a value an earlier one set.
+  // Mindbird keeps at most 500 characters per value. Empties are left out so a
+  // later push never blanks a value an earlier one set — except the join link,
+  // which belongs to one session: sent blank, it clears the last session's link.
+  const ALWAYS = new Set(["mc_join_url"]);
   const attributes = Object.fromEntries(
-    Object.entries(attrs).map(([k, v]) => [k, String(v).trim().slice(0, 500)] as const).filter(([, v]) => v !== ""),
+    Object.entries(attrs).map(([k, v]) => [k, String(v).trim().slice(0, 500)] as const).filter(([k, v]) => v !== "" || ALWAYS.has(k)),
   );
   return {
     phone: toMindbirdPhone(lead.phone),
@@ -141,4 +143,17 @@ export async function syncLead(lead: McLead, session: McSession, event?: McEvent
   } catch (err) {
     console.error("[mindbird] sync failed:", err);
   }
+}
+
+const ATTENDANCE_EVENT_DAYS = 7;
+
+/**
+ * Attended / no-show events (which Mindbird's rules turn into messages) only
+ * for a session that started in the last 7 days. A Zoom re-sync of an old
+ * session updates the details but must not message people about a masterclass
+ * weeks behind them.
+ */
+export function attendanceEventAllowed(session: McSession, now = Date.now()): boolean {
+  const t = session.datetimeUtc ? Date.parse(session.datetimeUtc) : NaN;
+  return Number.isFinite(t) && t <= now && now - t <= ATTENDANCE_EVENT_DAYS * 86_400_000;
 }
