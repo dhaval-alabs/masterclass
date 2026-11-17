@@ -54,3 +54,15 @@ select substring(error_detail from 'code=(\d+)') as code,
 from excel_to_ai.whatsapp_send_log
 where status = 'failed' and sent_at >= '2026-11-13'
 group by 1, 2, 3 order by rows desc limit 20;
+
+-- 7) Is the campaign actually moving? Queue rows by status per campaign (pending = still to send).
+select c.template_name, c.status as campaign_status, q.status as queue_status, count(*)
+from excel_to_ai.whatsapp_send_queue q
+join excel_to_ai.whatsapp_campaigns c on c.id = q.campaign_id
+group by 1, 2, 3 order by 1, 3;
+
+-- 8) Sends per day (IST) and how many were delivered/read — proves it is sending, and at what pace.
+select date(sent_at at time zone 'Asia/Kolkata') as day_ist, status, count(*)
+from excel_to_ai.whatsapp_send_log
+where sent_at >= '2026-11-13'
+group by 1, 2 order by 1 desc, 2;

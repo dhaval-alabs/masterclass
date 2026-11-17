@@ -4447,7 +4447,7 @@ export async function getCampaignIdsWithPendingQueue(limit = 500): Promise<strin
     .schema('excel_to_ai')
     .from('whatsapp_send_queue')
     .select('campaign_id')
-    .eq('status', 'pending')
+    .in('status', ['pending', 'processing']) // 'processing' rows abandoned by a killed drain are recovered by the claim
     .limit(limit);
   if (error) throw error;
   return [...new Set((data ?? []).map(r => r.campaign_id as string))];
