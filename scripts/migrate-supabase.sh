@@ -12,7 +12,10 @@
 # The old project is never written to.
 set -euo pipefail
 
-OLD="host=aws-1-ap-southeast-2.pooler.supabase.com port=5432 dbname=postgres user=postgres.qhgelnkakutzbuvowxzj sslmode=require connect_timeout=20"
+# OLD_USER can be the app's own login instead of the admin one, if the admin password is unknown:
+#   OLD_USER=lp_excel_to_ai.qhgelnkakutzbuvowxzj bash scripts/migrate-supabase.sh check
+OLD_USER="${OLD_USER:-postgres.qhgelnkakutzbuvowxzj}"
+OLD="host=aws-1-ap-southeast-2.pooler.supabase.com port=5432 dbname=postgres user=$OLD_USER sslmode=require connect_timeout=20"
 NEW="host=aws-0-ap-south-1.pooler.supabase.com port=5432 dbname=postgres user=postgres.tqtqywzqywwjacurbngz sslmode=require connect_timeout=20"
 BACKUP_DIR="${BACKUP_DIR:-$HOME/excel_to_ai_backup}"
 SCHEMA=excel_to_ai
