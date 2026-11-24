@@ -682,7 +682,12 @@ export default function WhatsAppTab() {
     const sentRecently = (c.status === "sent" || c.status === "partial")
       && !!c.sentAt && (Date.now() - new Date(c.sentAt).getTime()) < 24 * 60 * 60 * 1000;
     if (!isSending && !sentRecently) return;
-    const id = setInterval(() => { loadCampaignLogs(expandedId, true); }, isSending ? 15_000 : 30_000);
+    // Each refresh downloads the campaign's full recipient list (thousands of rows), so keep it
+    // slow and skip it while the tab is in the background — this polling helped exhaust the old
+    // project's egress quota.
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") loadCampaignLogs(expandedId, true);
+    }, 120_000);
     return () => clearInterval(id);
   }, [expandedId, campaigns, loadCampaignLogs]);
 
@@ -691,7 +696,9 @@ export default function WhatsAppTab() {
   useEffect(() => {
     const anySending = campaigns.some(c => c.status === "sending");
     if (!anySending) return;
-    const id = setInterval(() => { loadCampaigns(); loadDailyCount(); }, 20_000);
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") { loadCampaigns(); loadDailyCount(); }
+    }, 60_000);
     return () => clearInterval(id);
   }, [campaigns, loadCampaigns, loadDailyCount]);
 
@@ -699,21 +706,33 @@ export default function WhatsAppTab() {
   // drain a chunk until the queue is empty. This finishes large sends even on
   // Vercel Hobby (where the cron only runs ~daily) — no external cron needed
   // while an admin is watching. A ref prevents overlapping drain loops.
+  // It stops as soon as a round sends nothing (daily limit reached, paused, or blocked) and then
+  // waits 10 minutes before trying again. It used to keep asking every 2 s even when nothing could
+  // be sent — and restart itself whenever the list refreshed — which is what used up the old
+  // Supabase project's egress quota. The 5-minute cron keeps draining regardless.
   const drainingRef = useRef(false);
+  const drainIdleUntilRef = useRef(0);
   const drainLoop = useCallback(async () => {
-    if (drainingRef.current) return;
+    if (drainingRef.current || Date.now() < drainIdleUntilRef.current) return;
     drainingRef.current = true;
     try {
-      for (let i = 0; i < 100; i++) {
+      for (let i = 0; i < 30; i++) {
+        if (document.visibilityState !== "visible") break;
         const res = await fetch("/api/admin/whatsapp/drain", { method: "POST" });
         const data = await readJson(res).catch(() => null);
-        loadCampaigns();
-        loadDailyCount();
-        if (!data || (data.pendingCampaigns ?? 0) === 0) break;
-        await new Promise(r => setTimeout(r, 2000));
+        const moved = (data?.sent ?? 0) + (data?.autoSends?.sent ?? 0);
+        if (!data || (data.pendingCampaigns ?? 0) === 0 || moved === 0) {
+          drainIdleUntilRef.current = Date.now() + 10 * 60_000;
+          break;
+        }
+        await new Promise(r => setTimeout(r, 3000));
       }
-    } catch { /* stop; a later mount/send retries */ }
-    finally { drainingRef.current = false; }
+    } catch { /* stop; the cron keeps draining */ }
+    finally {
+      drainingRef.current = false;
+      loadCampaigns();
+      loadDailyCount();
+    }
   }, [loadCampaigns, loadDailyCount]);
 
   // Kick the drain on mount (clears any leftover pending) and whenever a campaign

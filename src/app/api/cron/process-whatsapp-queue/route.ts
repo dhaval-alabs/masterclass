@@ -1,6 +1,6 @@
 export const maxDuration = 300;
 import { NextRequest, NextResponse } from 'next/server';
-import { getDueScheduledWhatsAppCampaigns, getCampaignIdsWithPendingQueue, countPendingWhatsAppQueue, getWhatsAppCampaignById, updateWhatsAppCampaign } from '@/lib/db';
+import { getDueScheduledWhatsAppCampaigns, getCampaignIdsWithPendingQueue, updateWhatsAppCampaign } from '@/lib/db';
 import { fireWhatsAppCampaign, drainWhatsAppCampaignQueue, drainWhatsAppAutoSends } from '@/lib/whatsapp-campaign';
 import { missedScheduleNote } from '@/lib/missed-schedule';
 
@@ -49,18 +49,8 @@ async function handle(req: NextRequest) {
     }
 
     // 2. Drain pending queues (includes campaigns just fired above).
-    // Smallest backlog first: the queue query is unordered, so a big campaign could
-    // take the whole daily headroom every tick and starve a small one forever.
-    const unsorted = await getCampaignIdsWithPendingQueue();
-    const withCounts = await Promise.all(unsorted.map(async id => ({
-      id,
-      n: await countPendingWhatsAppQueue(id),
-      unverified: (await getWhatsAppCampaignById(id))?.audience === 'unverified',
-    })));
-    // Unverified-audience campaigns first (they hold the conversion), then smallest backlog first.
-    const pendingIds = withCounts
-      .sort((a, b) => Number(b.unverified) - Number(a.unverified) || a.n - b.n)
-      .map(x => x.id);
+    // Already in send order: unverified-audience campaigns first, then smallest backlog.
+    const pendingIds = await getCampaignIdsWithPendingQueue();
     let queuesDrained = 0;
     let sent = 0;
     let stillQueued = 0;

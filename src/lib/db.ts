@@ -4072,6 +4072,12 @@ export async function reconcileWhatsAppCampaignCounters(
 export async function getWhatsAppCampaignLogCounts(
   campaignId: string,
 ): Promise<{ sent: number; failed: number; skipped: number }> {
+  // Counted in the database (migration 0039) — downloading every log row for this was the
+  // main egress cost that got the old Supabase project shut off.
+  const rpc = await client().schema('excel_to_ai').rpc('whatsapp_campaign_log_counts', { p_campaign_id: campaignId });
+  const row = (rpc.data as { sent: number; failed: number; skipped: number }[] | null)?.[0];
+  if (!rpc.error && row) return { sent: row.sent, failed: row.failed, skipped: row.skipped };
+  console.error('[WhatsApp] whatsapp_campaign_log_counts unavailable — run migration 0039:', rpc.error?.message);
   const logs = await getWhatsAppCampaignLogs(campaignId);
   const rank: Record<string, number> = { read: 4, delivered: 3, sent: 2, failed: 1, skipped: 0 };
   const best = new Map<string, string>();
@@ -4505,25 +4511,28 @@ export async function getCampaignIdsWithPendingQueue(limit = 200): Promise<strin
   // Ask per CAMPAIGN, not per queue row. This used to read the first 500 pending queue rows and
   // collect their campaign ids — so one campaign with thousands of queued people (the 6,000-person
   // retarget) filled all 500 rows and every smaller campaign behind it (the unverified nudge, 34
-  // people) was never seen by the cron at all.
+  // people) was never seen. Returned in send order: unverified-audience campaigns first (they hold
+  // the conversion), then smallest backlog first — used by both the cron and the admin drain.
   const { data: camps, error } = await client()
     .schema('excel_to_ai')
     .from('whatsapp_campaigns')
-    .select('id')
+    .select('id, audience')
     .order('created_at', { ascending: false })
     .limit(limit);
   if (error) throw error;
-  const ids = (camps ?? []).map(c => c.id as string);
-  const withWork = await Promise.all(ids.map(async id => {
+  const withWork = await Promise.all((camps ?? []).map(async c => {
     const { count } = await client()
       .schema('excel_to_ai')
       .from('whatsapp_send_queue')
       .select('*', { count: 'exact', head: true })
-      .eq('campaign_id', id)
+      .eq('campaign_id', c.id as string)
       .in('status', ['pending', 'processing']); // 'processing' rows abandoned by a killed drain are recovered by the claim
-    return (count ?? 0) > 0 ? id : null;
+    return { id: c.id as string, unverified: c.audience === 'unverified', n: count ?? 0 };
   }));
-  return withWork.filter((id): id is string => id !== null);
+  return withWork
+    .filter(c => c.n > 0)
+    .sort((a, b) => Number(b.unverified) - Number(a.unverified) || a.n - b.n)
+    .map(c => c.id);
 }
 
 // Recipients in the audience who have NOT already been logged for this WhatsApp
@@ -4608,6 +4617,23 @@ export async function getWhatsAppFailureBreakdown(campaignId: string): Promise<{
   retryable: number;
   groups: { kind: WaErrorKind; label: string; code: number | null; count: number; sample: string | null }[];
 }> {
+  const rpc = await client().schema('excel_to_ai').rpc('whatsapp_failure_groups', { p_campaign_id: campaignId });
+  if (!rpc.error && rpc.data) {
+    const groups = new Map<string, { kind: WaErrorKind; label: string; code: number | null; count: number; sample: string | null }>();
+    let total = 0, retryable = 0;
+    for (const g of rpc.data as { error_key: string; sample: string | null; people: number }[]) {
+      const kind = classifyWaError(g.sample);
+      const code = waErrorCode(g.sample);
+      total += g.people;
+      if (isRetryable(kind)) retryable += g.people;
+      const key = `${kind}:${code ?? ''}`;
+      const cur = groups.get(key) ?? { kind, label: WA_ERROR_LABEL[kind], code, count: 0, sample: g.sample };
+      cur.count += g.people;
+      groups.set(key, cur);
+    }
+    return { total, retryable, groups: [...groups.values()].sort((a, b) => b.count - a.count) };
+  }
+  console.error('[WhatsApp] whatsapp_failure_groups unavailable — run migration 0039:', rpc.error?.message);
   const data = await fetchAllRows<{ phone: string; status: string; error_detail: string | null }>(() => client()
     .schema('excel_to_ai')
     .from('whatsapp_send_log')
@@ -4645,6 +4671,9 @@ export async function getWhatsAppDailySentCount(): Promise<number> {
   // The sending day starts at 09:00 IST (see wa-limits.ts), not midnight UTC —
   // so a broadcast's leftovers resume at a sane hour instead of 05:30 IST.
   const dayStart = waDayStart();
+  const rpc = await client().schema('excel_to_ai').rpc('whatsapp_daily_sent_count', { p_since: dayStart.toISOString() });
+  if (!rpc.error && typeof rpc.data === 'number') return rpc.data;
+  console.error('[WhatsApp] whatsapp_daily_sent_count unavailable — run migration 0039:', rpc.error?.message);
   // Paged — the cap check itself must not undercount once a day passes 1,000
   // sends (any WA_DAILY_LIMIT above 1,000 would otherwise never trip).
   const data = await fetchAllRows<{ phone: string }>(() => client()
