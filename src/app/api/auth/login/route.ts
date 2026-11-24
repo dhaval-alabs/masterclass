@@ -79,7 +79,8 @@ export async function POST(request: Request) {
     if (!matchedUser) {
       const envCreds = loadEnvCredentials();
       for (const cred of envCreds) {
-        const userOk = timingSafeEqualStr(username, cred.user);
+        // Usernames are emails — compare case-insensitively, like the DB lookup (ilike) does.
+        const userOk = timingSafeEqualStr(username.trim().toLowerCase(), cred.user.trim().toLowerCase());
         const passOk = timingSafeEqualStr(password, cred.password);
         if (userOk && passOk) matchedUser = cred.user;
       }
