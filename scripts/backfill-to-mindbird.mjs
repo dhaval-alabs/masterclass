@@ -27,7 +27,8 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SECRET_KEY;
 if (!SUPABASE_URL || !SUPABASE_KEY) { console.error('Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY'); process.exit(1); }
 if (APPLY && (!process.env.MINDBIRD_API_URL || !process.env.MINDBIRD_API_KEY)) { console.error('--apply needs MINDBIRD_API_URL and MINDBIRD_API_KEY'); process.exit(1); }
-const db = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
+// The tables live in the excel_to_ai schema, like the app's own client (src/lib/supabase.ts).
+const db = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false }, db: { schema: 'excel_to_ai' } });
 
 async function all(table, columns, order) {
   const out = [];
