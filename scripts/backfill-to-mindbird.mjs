@@ -40,7 +40,7 @@ async function all(table, columns, order) {
 }
 
 const sessions = await all('webinar_sessions', 'id, code, title, date_label, datetime_utc, created_at', 'created_at');
-const sessionById = new Map(sessions.map(s => [s.id, { code: s.code, title: s.title, dateLabel: s.date_label, datetimeUtc: s.datetime_utc, sortAt: Date.parse(s.datetime_utc || s.created_at) || 0 }]));
+const sessionById = new Map(sessions.map(s => [s.id, { id: s.id, code: s.code, title: s.title, dateLabel: s.date_label, datetimeUtc: s.datetime_utc, sortAt: Date.parse(s.datetime_utc || s.created_at) || 0 }]));
 const regs = await all('registrations', 'id, full_name, email, phone, status, city, created_at, attended, session_id, zoom_join_url, current_status', 'created_at');
 
 // 1. One row per (phone, session): Verified beats unverified; then the newest.

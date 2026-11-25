@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Plus, X, Check, Square, Power, Copy, Trash2, ShieldCheck, ShieldOff } from "lucide-react";
+import { Loader2, Plus, X, Check, Square, Power, Copy, Trash2, ShieldCheck, ShieldOff, ImageIcon } from "lucide-react";
 import { fromIstPicker } from "@/lib/ist";
+import SessionCreativesModal from "./SessionCreativesModal";
 
 type SessionStatus = "upcoming" | "active" | "completed";
 
@@ -97,6 +98,8 @@ export default function SessionsTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  // The session whose WhatsApp creatives are open.
+  const [creativesFor, setCreativesFor] = useState<WebinarSession | null>(null);
 
   // Create form
   const [showCreate, setShowCreate] = useState(false);
@@ -342,6 +345,13 @@ export default function SessionsTab() {
                             OTP {s.otpRequired ? "On" : "Off"}
                           </button>
                           <button
+                            onClick={() => setCreativesFor(s)}
+                            className="text-xs font-semibold text-[#003368] hover:bg-[#003368]/10 px-2 py-1 rounded flex items-center gap-1"
+                            title="The images WhatsApp messages about this session use: one per image template, plus a default."
+                          >
+                            <ImageIcon className="w-3.5 h-3.5" /> Creatives
+                          </button>
+                          <button
                             disabled={busy}
                             onClick={() => handleReuse(s)}
                             className="text-xs font-semibold text-[#003368] hover:bg-[#003368]/10 px-2 py-1 rounded flex items-center gap-1 disabled:opacity-40"
@@ -397,6 +407,8 @@ export default function SessionsTab() {
           </div>
         )}
       </div>
+
+      {creativesFor && <SessionCreativesModal session={creativesFor} onClose={() => setCreativesFor(null)} />}
 
       {/* Create modal */}
       {showCreate && (

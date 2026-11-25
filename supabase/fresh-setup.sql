@@ -1623,4 +1623,10 @@ alter default privileges for role postgres in schema excel_to_ai grant all on se
 alter default privileges for role postgres in schema excel_to_ai grant execute on functions to service_role;
 
 
+-- ===== 0041_session_wa_creatives.sql =====
+alter table excel_to_ai.webinar_sessions
+  add column if not exists wa_creatives jsonb not null default '{}'::jsonb;
+alter table excel_to_ai.webinar_sessions
+  add column if not exists wa_creatives_sync jsonb;
+
 commit;

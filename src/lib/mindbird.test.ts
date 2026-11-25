@@ -1,7 +1,7 @@
 // Run: node --test src/lib/mindbird.test.ts   (Node 24 strips the types)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toMindbirdPhone, buildContactRow, syncLead, mindbirdEnabled } from "./mindbird.ts";
+import { toMindbirdPhone, buildContactRow, syncLead, mindbirdEnabled, cleanCreatives, creativeItems, missingImageTemplates, pushSessionCreatives, sessionCreativeStatus } from "./mindbird.ts";
 
 const session = { code: "EXL22", title: "Excel to AI", dateLabel: "22 Nov", datetimeUtc: "2026-11-22T13:30:00Z" };
 const lead = { phone: "+91 98765 43210", fullName: "Rahul Sharma", email: "r@x.in", city: "Pune", currentStatus: "Working professional", verified: false, attended: null, registeredAt: "2026-11-17T08:35:00Z", utm: { source: "meta", campaign: "B2_Excel" } };
@@ -97,4 +97,75 @@ test("attendance events only for a session that started in the last 7 days", asy
   assert.equal(attendanceEventAllowed({ ...session, datetimeUtc: "2026-11-10T13:30:00Z" }, now), false);
   assert.equal(attendanceEventAllowed({ ...session, datetimeUtc: "2026-11-30T13:30:00Z" }, now), false);   // not happened yet
   assert.equal(attendanceEventAllowed({ ...session, datetimeUtc: null }, now), false);
+});
+
+// ── Campaign creatives ──────────────────────────────────────────────────────
+
+const CONNECTED = { MINDBIRD_SYNC_ENABLED: undefined, MINDBIRD_API_URL: "https://mb.test/", MINDBIRD_API_KEY: "k" };
+const s22 = { id: "8f1c-uuid", code: "EXL22", title: "Excel to AI", dateLabel: "22 Nov", datetimeUtc: "2026-11-22T13:30:00Z", status: "active" };
+
+test("every contact and event carries the session's fixed id, which Mindbird picks creatives by", () => {
+  const row = buildContactRow(lead, { ...session, id: "8f1c-uuid" });
+  assert.equal(row.attributes.mc_session_id, "8f1c-uuid");
+  assert.equal(buildContactRow(lead, session).attributes.mc_session_id, undefined);   // no id: left out, never blanked
+});
+
+test("stored creatives are cleaned: https links and template-shaped names only", () => {
+  assert.deepEqual(
+    cleanCreatives({ default: "https://cdn.test/d.jpg", templates: { promo_banner: "https://cdn.test/p.png", "Bad Name": "https://x.test/a.jpg", reminder: "http://plain.test/a.jpg" } }),
+    { default: "https://cdn.test/d.jpg", templates: { promo_banner: "https://cdn.test/p.png" } },
+  );
+  assert.deepEqual(cleanCreatives(null), { default: null, templates: {} });
+});
+
+test("a default covers every image template; without one, each needs its own", () => {
+  assert.deepEqual(missingImageTemplates(["a", "b"], { default: null, templates: { a: "https://x/a.jpg" } }), ["b"]);
+  assert.deepEqual(missingImageTemplates(["a", "b"], { default: "https://x/d.jpg", templates: {} }), []);
+});
+
+test("the whole set goes to Mindbird as one round of the masterclass, with the session's batch names", async () => {
+  await withEnv(CONNECTED, async () => {
+    const orig = globalThis.fetch;
+    let seen: { url: string; init: RequestInit } | null = null;
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      seen = { url, init };
+      return new Response(JSON.stringify({ ignored: false, items: [{ template: null, status: "stored" }, { template: "promo_banner", status: "unchanged" }] }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const r = await pushSessionCreatives(s22, { default: "https://cdn.test/d.jpg", templates: { promo_banner: "https://cdn.test/p.png" } }, { version: 123 });
+      assert.equal(r.ok, true);
+      assert.equal(seen!.url, "https://mb.test/api/creatives");
+      assert.equal(seen!.init.method, "PUT");
+      const body = JSON.parse(String(seen!.init.body));
+      assert.deepEqual(body, {
+        set: "masterclass", ref: "8f1c-uuid", label: "22 Nov", startsAt: "2026-11-22T13:30:00Z",
+        batchName: "Masterclass · 22 Nov", setBatchName: "Masterclass", current: true, version: 123,
+        items: [{ template: null, imageUrl: "https://cdn.test/d.jpg" }, { template: "promo_banner", imageUrl: "https://cdn.test/p.png" }],
+      });
+    } finally { globalThis.fetch = orig; }
+  });
+});
+
+test("a refused image, an ignored older save, and Mindbird being down all come back as answers, never throws", async () => {
+  await withEnv(CONNECTED, async () => {
+    const orig = globalThis.fetch;
+    try {
+      globalThis.fetch = (async () => new Response(JSON.stringify({ items: [{ template: "promo_banner", status: "refused", reason: "WEBP" }] }), { status: 200 })) as typeof fetch;
+      assert.equal((await pushSessionCreatives(s22, { default: null, templates: { promo_banner: "https://x/p.webp" } })).ok, false);
+      globalThis.fetch = (async () => new Response(JSON.stringify({ ignored: true, reason: "A newer save of this round is already in Mindbird." }), { status: 200 })) as typeof fetch;
+      assert.match((await pushSessionCreatives(s22, { default: null, templates: {} })).error ?? "", /newer save/);
+      globalThis.fetch = (async () => { throw new Error("connect ECONNREFUSED"); }) as typeof fetch;
+      assert.match((await pushSessionCreatives(s22, { default: null, templates: {} })).error ?? "", /ECONNREFUSED/);
+      assert.equal((await sessionCreativeStatus("8f1c-uuid")).ok, false);
+    } finally { globalThis.fetch = orig; }
+  });
+});
+
+test("without the Mindbird URL and key nothing is sent, and it says why", async () => {
+  await withEnv({ MINDBIRD_API_URL: undefined, MINDBIRD_API_KEY: undefined }, async () => {
+    const r = await pushSessionCreatives(s22, { default: "https://cdn.test/d.jpg", templates: {} });
+    assert.equal(r.ok, false);
+    assert.match(r.error ?? "", /not connected/);
+    assert.deepEqual(creativeItems({ default: null, templates: {} }), []);
+  });
 });

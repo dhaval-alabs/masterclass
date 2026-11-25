@@ -1,3 +1,4 @@
+import { cleanCreatives, type SessionCreatives, type CreativesSync } from './mindbird';
 import { getServiceClient } from './supabase';
 import { classifyWaError, isRetryable, waErrorCode, WA_ERROR_LABEL, type WaErrorKind } from './wa-errors';
 import { waDayStart, effectiveDailyLimit } from './wa-limits';
@@ -1929,6 +1930,9 @@ export interface WebinarSession {
   endedAt: string | null;
   registrationsCount: number;
   attendeesCount: number;
+  // WhatsApp creatives for this session (0041), and the last send to Mindbird.
+  waCreatives: SessionCreatives;
+  waCreativesSync: CreativesSync | null;
 }
 
 type WebinarSessionRow = {
@@ -1954,6 +1958,8 @@ type WebinarSessionRow = {
   ended_at: string | null;
   registrations_count: number;
   attendees_count: number;
+  wa_creatives?: unknown;
+  wa_creatives_sync?: CreativesSync | null;
 };
 
 function mapSession(row: WebinarSessionRow): WebinarSession {
@@ -1980,7 +1986,19 @@ function mapSession(row: WebinarSessionRow): WebinarSession {
     endedAt: row.ended_at,
     registrationsCount: row.registrations_count ?? 0,
     attendeesCount: row.attendees_count ?? 0,
+    waCreatives: cleanCreatives(row.wa_creatives),
+    waCreativesSync: row.wa_creatives_sync ?? null,
   };
+}
+
+/** Save a session's WhatsApp creatives and/or the result of the last send to Mindbird. */
+export async function setSessionCreatives(id: string, patch: { creatives?: SessionCreatives; sync?: CreativesSync }): Promise<WebinarSession> {
+  const dbPatch: Record<string, unknown> = {};
+  if (patch.creatives) dbPatch.wa_creatives = cleanCreatives(patch.creatives);
+  if (patch.sync) dbPatch.wa_creatives_sync = patch.sync;
+  const { data, error } = await client().from('webinar_sessions').update(dbPatch).eq('id', id).select('*').single();
+  if (error) throw error;
+  return mapSession(data as WebinarSessionRow);
 }
 
 export async function listWebinarSessions(): Promise<WebinarSession[]> {

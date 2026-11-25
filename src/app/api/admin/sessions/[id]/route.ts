@@ -4,7 +4,7 @@
 //   PATCH  { action: 'update', ...patch } → update editable fields
 //   DELETE                              → permanently delete the session (blocked if it has registrations)
 
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { cookies } from 'next/headers';
 import {
   activateWebinarSession,
@@ -13,8 +13,25 @@ import {
   getWebinarSessionById,
   deleteWebinarSession,
   logSessionAudit,
+  setSessionCreatives,
   type WebinarSession,
 } from '@/lib/db';
+import { mindbirdConfigured, pushSessionCreatives } from '@/lib/mindbird';
+
+// Keep Mindbird's copy of this session's creatives in step (see mindbird.ts).
+// On ACTIVATE it is sent even with no images: it is what makes this session the
+// current one in Mindbird, so a broadcast to the whole "Masterclass" batch can
+// never pick up the previous session's creative. After the response; never
+// fails the request.
+function syncCreativesLater(session: WebinarSession, always: boolean) {
+  if (!mindbirdConfigured()) return;
+  const c = session.waCreatives;
+  if (!always && !c.default && !Object.keys(c.templates).length) return;
+  after(async () => {
+    const sync = await pushSessionCreatives(session, c);
+    await setSessionCreatives(session.id, { sync }).catch(err => console.error('[sessions] creatives sync not saved', err));
+  });
+}
 import { verifyAdminSession, type AdminSession } from '@/lib/auth';
 import { assertSameOrigin } from '@/lib/security';
 
@@ -53,6 +70,7 @@ export async function PATCH(
     if (action === 'activate') {
       const session = await activateWebinarSession(id);
       logSessionAudit({ sessionId: id, adminEmail: admin.sub, action: 'activate', before, after: session, ip });
+      syncCreativesLater(session, true);
       return NextResponse.json({ session });
     }
     if (action === 'end') {
@@ -74,6 +92,7 @@ export async function PATCH(
         otpRequired: body.otpRequired,
       });
       logSessionAudit({ sessionId: id, adminEmail: admin.sub, action: 'update', before, after: session, ip });
+      syncCreativesLater(session, false);
       return NextResponse.json({ session });
     }
 

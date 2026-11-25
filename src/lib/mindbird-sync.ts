@@ -14,7 +14,7 @@ export async function syncRegistration(
       ?? (reg.sessionId ? await getWebinarSessionById(reg.sessionId) : null)
       ?? await getActiveWebinarSession();
     if (!session) { console.warn('[mindbird] no session for registration', reg.id); return; }
-    const mc = { code: session.code, title: session.title, dateLabel: session.dateLabel, datetimeUtc: session.datetimeUtc };
+    const mc = { id: session.id, code: session.code, title: session.title, dateLabel: session.dateLabel, datetimeUtc: session.datetimeUtc };
     let event = opts.event;
     if ((event === 'mc_attended' || event === 'mc_no_show') && !attendanceEventAllowed(mc)) event = undefined;
     await syncLead({
@@ -43,7 +43,7 @@ export async function syncRegistration(
 export async function syncAttendanceBulk(regs: Registration[], session: WebinarSession): Promise<void> {
   if (!mindbirdEnabled() || !regs.length) return;
   try {
-    const mc = { code: session.code, title: session.title, dateLabel: session.dateLabel, datetimeUtc: session.datetimeUtc };
+    const mc = { id: session.id, code: session.code, title: session.title, dateLabel: session.dateLabel, datetimeUtc: session.datetimeUtc };
     const rows = regs.map(reg => buildContactRow({
       phone: reg.phone, fullName: reg.fullName, email: reg.email, city: reg.city,
       currentStatus: reg.currentStatus ?? null, verified: reg.status === 'Verified',
