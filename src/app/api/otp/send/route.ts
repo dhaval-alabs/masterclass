@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
+import { resyncRegistration } from '@/lib/mindbird-sync';
 // Lead capture (DB / LSQ / Sheets) now happens in /api/lead/capture at form-submit time.
 // This route asks the shared WABA OTP service to send a code and builds the
 // lead-context token. The code is generated + delivered + verified entirely by
@@ -74,6 +75,7 @@ export async function POST(req: NextRequest) {
           whatsappError: otpSend.error,
           whatsappMessageId: null,
         });
+        after(() => resyncRegistration(registrationId));   // Mindbird: the WA column
       } catch (err) {
         console.error('[otp/send] recordOtpSendResult failed:', err);
       }

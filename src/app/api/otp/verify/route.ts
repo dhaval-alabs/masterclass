@@ -198,7 +198,12 @@ export async function POST(req: NextRequest) {
 
     // Mindbird: the lead is verified now, with its Zoom join link, and the
     // event its welcome / reminder rules act on. Off unless MINDBIRD_SYNC_ENABLED=1.
-    after(() => syncRegistration(verifiedReg, { event: 'mc_verified', joinUrl: zoomJoinUrl || null }));
+    // The Zoom outcome just saved above goes with it (the admin's Zoom column).
+    const zoomSaved = !!(registrationId && typeof registrationId === 'string');
+    after(() => syncRegistration(
+      zoomSaved ? { ...verifiedReg, zoomRegistered: !zoomError, zoomJoinUrl: zoomJoinUrl || null } : verifiedReg,
+      { event: 'mc_verified', joinUrl: zoomJoinUrl || null },
+    ));
 
     // 6. Queue in the scheduled-send system (delivery time = campaign delay).
     getAutoSendCampaign('verified').then(async campaign => {

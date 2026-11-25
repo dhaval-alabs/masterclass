@@ -1,12 +1,14 @@
 // A registration row → Mindbird (see mindbird.ts). Loads the row's session so
 // every caller sends the same complete picture: the routes only say which
 // registration changed and, when it matters, which event Mindbird should act on.
-import { getActiveWebinarSession, getWebinarSessionById, type Registration, type WebinarSession } from './db';
+import { getActiveWebinarSession, getRegistrationById, getWebinarSessionById, type Registration, type WebinarSession } from './db';
 import { attendanceEventAllowed, buildContactRow, mindbirdEnabled, pushMasterclassLeads, sendMindbirdEvent, syncLead, type McEvent, type McLead } from './mindbird';
 
 /** The admin table's other columns (lead score, verified at, Zoom, duration, WhatsApp). */
 function adminColumns(reg: Registration): Pick<McLead, 'leadScore' | 'verifiedAt' | 'zoomRegistered' | 'attendMinutes' | 'waStatus'> {
-  return { leadScore: reg.leadScore ?? null, verifiedAt: reg.verifiedAt ?? null, zoomRegistered: reg.zoomRegistered ?? null, attendMinutes: reg.attendanceDurationMin ?? null, waStatus: reg.whatsappStatus ?? null };
+  return { leadScore: reg.leadScore ?? null, verifiedAt: reg.verifiedAt ?? null, zoomRegistered: reg.zoomRegistered ?? null, attendMinutes: reg.attendanceDurationMin ?? null, // 'pending' only means the OTP has not gone yet; sent as is, a slow first
+    // push could land after the real state and overwrite it.
+    waStatus: reg.whatsappStatus === 'pending' ? null : reg.whatsappStatus ?? null };
 }
 
 export async function syncRegistration(
@@ -38,6 +40,23 @@ export async function syncRegistration(
     }, mc, event);
   } catch (err) {
     console.error('[mindbird] syncRegistration failed:', err);
+  }
+}
+
+/**
+ * A registration changed after it was first sent (lead score, Zoom, WhatsApp
+ * status, attendance): read the row as it is NOW and send it again, details
+ * only, no event. Every writer of a field Mindbird shows calls this, so
+ * Mindbird keeps the admin table's picture (mindbird-coverage.test.ts).
+ * Never throws: Mindbird being down must not break the caller.
+ */
+export async function resyncRegistration(id: string | null | undefined): Promise<void> {
+  if (!id || !mindbirdEnabled()) return;
+  try {
+    const reg = await getRegistrationById(id);
+    if (reg) await syncRegistration(reg);
+  } catch (err) {
+    console.error('[mindbird] resyncRegistration failed:', err);
   }
 }
 

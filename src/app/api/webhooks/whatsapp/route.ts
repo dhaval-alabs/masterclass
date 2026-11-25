@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { updateWhatsAppSendLogByMessageId, updateOtpDeliveryByMessageId } from '@/lib/db';
+import { resyncRegistration } from '@/lib/mindbird-sync';
 
 // ── Webhook verification (GET) ────────────────────────────────────────────────
 
@@ -106,7 +107,8 @@ export async function POST(req: NextRequest) {
             updateWhatsAppSendLogByMessageId(messageId, logUpdate).catch(err =>
               console.error(`[WA webhook] send_log ${statusValue} update failed for ${messageId}:`, err),
             ),
-            updateOtpDeliveryByMessageId(messageId, { whatsappStatus: statusValue }).catch(err =>
+            updateOtpDeliveryByMessageId(messageId, { whatsappStatus: statusValue })
+              .then(async ids => { await Promise.all(ids.map(resyncRegistration)); }).catch(err =>
               console.error(`[WA webhook] registration ${statusValue} update failed for ${messageId}:`, err),
             ),
           );
@@ -123,7 +125,8 @@ export async function POST(req: NextRequest) {
             updateWhatsAppSendLogByMessageId(messageId, { status: 'failed', errorDetail: detail }).catch(err =>
               console.error(`[WA webhook] send_log failed update failed for ${messageId}:`, err),
             ),
-            updateOtpDeliveryByMessageId(messageId, { whatsappStatus: 'failed', whatsappError: detail }).catch(err =>
+            updateOtpDeliveryByMessageId(messageId, { whatsappStatus: 'failed', whatsappError: detail })
+              .then(async ids => { await Promise.all(ids.map(resyncRegistration)); }).catch(err =>
               console.error(`[WA webhook] registration failed update failed for ${messageId}:`, err),
             ),
           );

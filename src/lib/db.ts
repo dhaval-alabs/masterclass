@@ -750,6 +750,17 @@ export async function updateSettings(newSettings: Partial<SpeakerSettings>): Pro
   return merged;
 }
 
+/** One registration as stored now, or null when there is no such row. */
+export async function getRegistrationById(id: string): Promise<Registration | null> {
+  const { data, error } = await client()
+    .from('registrations')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? mapRegistration(data) : null;
+}
+
 export async function getRegistrations(): Promise<Registration[]> {
   try {
     const { data, error } = await client()
@@ -1007,14 +1018,17 @@ export async function recordOtpSendResult(
 export async function updateOtpDeliveryByMessageId(
   metaMessageId: string,
   updates: { whatsappStatus: string; whatsappError?: string | null },
-): Promise<void> {
+): Promise<string[]> {
   const patch: Record<string, unknown> = { whatsapp_status: updates.whatsappStatus };
   if (updates.whatsappError !== undefined) patch.whatsapp_error = updates.whatsappError;
-  const { error } = await client()
+  const { data, error } = await client()
     .from('registrations')
     .update(patch)
-    .eq('whatsapp_message_id', metaMessageId);
+    .eq('whatsapp_message_id', metaMessageId)
+    .select('id');
   if (error) throw error;
+  // The registrations it changed, so the caller can re-send them to Mindbird.
+  return (data ?? []).map(r => (r as { id: string }).id);
 }
 
 export async function updateLeadScore(

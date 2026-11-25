@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
+import { resyncRegistration } from '@/lib/mindbird-sync';
 import { cookies } from 'next/headers';
 import { updateLeadScore } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
@@ -156,6 +157,7 @@ export async function POST(
     const { score, reason } = await scoreLead(conversation);
 
     await updateLeadScore(id, score);
+    after(() => resyncRegistration(id));   // Mindbird: the Lead Score column
 
     // Fire-and-forget LSQ update
     if (phone) {

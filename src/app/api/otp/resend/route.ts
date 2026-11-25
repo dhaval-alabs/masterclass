@@ -14,7 +14,8 @@
 // if the user just started the OTP step. The code + its verification are owned
 // by the WABA service — no HMAC/expiry is minted here.
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
+import { resyncRegistration } from '@/lib/mindbird-sync';
 import { sendOtpCode } from '@/lib/otpService';
 import { recordOtpSendResult } from '@/lib/db';
 
@@ -54,6 +55,7 @@ export async function POST(req: NextRequest) {
           whatsappError: otpSend.error,
           whatsappMessageId: null,
         });
+        after(() => resyncRegistration(registrationId));   // Mindbird: the WA column
       } catch (err) {
         console.error('[otp/resend] recordOtpSendResult failed:', err);
       }

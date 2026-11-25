@@ -1,4 +1,5 @@
 import { updateLeadScore, saveConversation } from '@/lib/db';
+import { resyncRegistration } from '@/lib/mindbird-sync';
 
 export type LeadScore = 'hot' | 'warm' | 'cold' | 'junk';
 
@@ -152,6 +153,7 @@ export async function scoreAndSave(params: {
     try {
       await updateLeadScore(registrationId, score);
       console.log(`${label} DB write OK → ${registrationId} = ${score}`);
+      await resyncRegistration(registrationId);   // Mindbird: the Lead Score column
     } catch (dbErr: unknown) {
       const msg = dbErr instanceof Error ? dbErr.message : JSON.stringify(dbErr);
       console.error(`${label} DB write FAILED for ${registrationId}: ${msg}`);

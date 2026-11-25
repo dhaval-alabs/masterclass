@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUnscoredVerifiedRegistrations, updateLeadScore } from '@/lib/db';
+import { resyncRegistration } from '@/lib/mindbird-sync';
 import { scoreConversation, type ConversationTurn } from '@/lib/qualify';
 import { sendMetaCapiEvent } from '@/lib/meta';
 
@@ -24,6 +25,7 @@ async function handle(req: NextRequest) {
     try {
       const { score } = await scoreConversation(row.conversation as ConversationTurn[]);
       await updateLeadScore(row.id, score);
+      await resyncRegistration(row.id);   // Mindbird: the Lead Score column
       console.log(`[rescore-cron] ${row.id} → ${score}`);
       scored++;
 
