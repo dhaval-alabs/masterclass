@@ -1629,4 +1629,10 @@ alter table excel_to_ai.webinar_sessions
 alter table excel_to_ai.webinar_sessions
   add column if not exists wa_creatives_sync jsonb;
 
+-- ===== 0042_registration_wa_consent.sql =====
+alter table excel_to_ai.registrations add column if not exists wa_consent boolean not null default false;
+alter table excel_to_ai.registrations add column if not exists wa_consent_at timestamptz;
+alter table excel_to_ai.registrations add column if not exists wa_consent_text text;
+alter table excel_to_ai.settings add column if not exists form_wa_consent_label text;
+
 commit;

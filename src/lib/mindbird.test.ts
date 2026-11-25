@@ -169,3 +169,17 @@ test("without the Mindbird URL and key nothing is sent, and it says why", async 
     assert.deepEqual(creativeItems({ default: null, templates: {} }), []);
   });
 });
+
+// ── WhatsApp marketing consent ──────────────────────────────────────────────
+
+test("a ticked box goes to Mindbird with the exact wording, so it records the opt-in", () => {
+  const row = buildContactRow({ ...lead, consent: { at: "2026-11-25T08:00:00Z", text: "I agree to receive WhatsApp messages…" } }, session);
+  assert.deepEqual(row.consent, { grantedAt: "2026-11-25T08:00:00Z", text: "I agree to receive WhatsApp messages…", method: "masterclass registration form tick box" });
+  assert.equal(row.attributes.mc_wa_consent, "yes");
+});
+
+test("an empty box sends no consent at all, and never a 'no' that could read as a withdrawal", () => {
+  const row = buildContactRow(lead, session);
+  assert.equal(row.consent, undefined);
+  assert.equal(row.attributes.mc_wa_consent, undefined);
+});

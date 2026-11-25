@@ -34,6 +34,8 @@ export interface McLead {
   registeredAt: string;
   joinUrl?: string | null;
   utm?: { source?: string | null; medium?: string | null; campaign?: string | null };
+  /** WhatsApp marketing consent from the form's tick box, with the wording shown. */
+  consent?: { at: string; text: string } | null;
 }
 
 export interface McContactRow {
@@ -43,6 +45,8 @@ export interface McContactRow {
   tags: string[];
   batches: string[];
   attributes: Record<string, string>;
+  /** Sent only when the person ticked the box: Mindbird records it as their opt-in, once. */
+  consent?: { grantedAt: string; text: string; method: string };
 }
 
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -86,6 +90,8 @@ export function buildContactRow(lead: McLead, session: McSession): McContactRow 
     mc_utm_source: lead.utm?.source ?? "",
     mc_utm_medium: lead.utm?.medium ?? "",
     mc_utm_campaign: lead.utm?.campaign ?? "",
+    // "yes" only: an unticked box must never look like a withdrawal.
+    mc_wa_consent: lead.consent ? "yes" : "",
   };
   // Mindbird keeps at most 500 characters per value. Empties are left out so a
   // later push never blanks a value an earlier one set — except the join link,
@@ -101,6 +107,7 @@ export function buildContactRow(lead: McLead, session: McSession): McContactRow 
     tags: ["masterclass", `mc-${session.code}`],
     batches: ["Masterclass", sessionBatchName(session)],
     attributes,
+    ...(lead.consent ? { consent: { grantedAt: lead.consent.at, text: lead.consent.text, method: "masterclass registration form tick box" } } : {}),
   };
 }
 

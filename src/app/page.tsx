@@ -196,6 +196,7 @@ export default async function MasterclassLandingPage() {
     statusOptions: config.formStatusOptions,
     referralOptions: config.formReferralOptions,
     ctaButtonText: config.ctaButtonText,
+    waConsentLabel: config.formWaConsentLabel,
     otpFooterLabel: config.formOtpFooterLabel,
     otpHeading: config.otpHeading,
     otpSubtitleTemplate: config.otpSubtitleTemplate,

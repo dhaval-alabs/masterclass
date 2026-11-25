@@ -10,6 +10,7 @@ import {
   scheduleWhatsAppForRecipient,
 } from '@/lib/db';
 import { lsqPostWithRetry } from '@/lib/lsqClient';
+import { waConsentLabel } from '@/lib/consent';
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -278,6 +279,9 @@ export async function POST(req: NextRequest) {
         fbc: typeof body.fbc === 'string' ? body.fbc : null,
         fbp: typeof body.fbp === 'string' ? body.fbp : null,
         fbclid: typeof body.fbclid === 'string' ? body.fbclid : null,
+        // WhatsApp marketing consent: only a real tick counts, and the wording
+        // recorded is the server's own (what the page showed), never the client's.
+        ...(body.waConsent === true ? { waConsent: true, waConsentAt: new Date().toISOString(), waConsentText: waConsentLabel(config.formWaConsentLabel) } : {}),
       });
       registrationId = created.id;
 

@@ -43,6 +43,11 @@ export interface Registration {
   currentStatus?: string | null;
   // Session the registration belongs to.
   sessionId?: string | null;
+  // WhatsApp marketing consent from the form's tick box (0042), with the exact
+  // wording shown, which is the evidence sent to Mindbird.
+  waConsent?: boolean | null;
+  waConsentAt?: string | null;
+  waConsentText?: string | null;
   // LLM lead qualification
   leadScore?: 'hot' | 'warm' | 'cold' | 'junk' | null;
   qualifiedAt?: string | null;
@@ -207,6 +212,7 @@ type SettingsRow = {
   form_placeholder_city?: string | null;
   form_status_options?: string | null;
   form_referral_options?: string | null;
+  form_wa_consent_label?: string | null;
   otp_heading?: string | null;
   otp_subtitle_template?: string | null;
   otp_edit_details_label?: string | null;
@@ -355,6 +361,7 @@ export interface WebinarConfig extends SpeakerSettings {
   formPlaceholderCity: string | null;
   formStatusOptions: string | null;
   formReferralOptions: string | null;
+  formWaConsentLabel: string | null;
   otpHeading: string | null;
   otpSubtitleTemplate: string | null;
   otpEditDetailsLabel: string | null;
@@ -454,6 +461,9 @@ type RegistrationRow = {
   fbc?: string | null;
   fbp?: string | null;
   fbclid?: string | null;
+  wa_consent?: boolean | null;
+  wa_consent_at?: string | null;
+  wa_consent_text?: string | null;
 };
 
 type FaqRow = {
@@ -501,6 +511,9 @@ function mapRegistration(row: RegistrationRow): Registration {
     fbc: row.fbc ?? null,
     fbp: row.fbp ?? null,
     fbclid: row.fbclid ?? null,
+    waConsent: row.wa_consent ?? false,
+    waConsentAt: row.wa_consent_at ?? null,
+    waConsentText: row.wa_consent_text ?? null,
   };
 }
 
@@ -623,6 +636,7 @@ function mapWebinarConfig(row: SettingsRow): WebinarConfig {
     formPlaceholderCity: row.form_placeholder_city ?? null,
     formStatusOptions: row.form_status_options ?? null,
     formReferralOptions: row.form_referral_options ?? null,
+    formWaConsentLabel: row.form_wa_consent_label ?? null,
     otpHeading: row.otp_heading ?? null,
     otpSubtitleTemplate: row.otp_subtitle_template ?? null,
     otpEditDetailsLabel: row.otp_edit_details_label ?? null,
@@ -915,8 +929,17 @@ export async function addUnverifiedRegistration(
     fbc: reg.fbc ?? null,
     fbp: reg.fbp ?? null,
     fbclid: reg.fbclid ?? null,
+    // Only when ticked: an empty box leaves the column at its default (false).
+    ...(reg.waConsent ? { wa_consent: true, wa_consent_at: reg.waConsentAt ?? new Date().toISOString(), wa_consent_text: reg.waConsentText ?? null } : {}),
   };
-  const { error } = await supabase.from('registrations').insert(row);
+  let { error } = await supabase.from('registrations').insert(row);
+  if (error && reg.waConsent && (error.code === 'PGRST204' || /wa_consent/.test(error.message ?? ''))) {
+    // 0042 not applied yet: a registration must never fail over the consent
+    // columns. Saved without them, and said loudly so it gets applied.
+    console.error('[db.addUnverifiedRegistration] consent not saved: apply migration 0042');
+    delete row.wa_consent; delete row.wa_consent_at; delete row.wa_consent_text;
+    ({ error } = await supabase.from('registrations').insert(row));
+  }
   if (error) throw error;
   return mapRegistration(row);
 }
@@ -1624,6 +1647,7 @@ export async function updateWebinarConfig(
   set('formPlaceholderCity', 'form_placeholder_city');
   set('formStatusOptions', 'form_status_options');
   set('formReferralOptions', 'form_referral_options');
+  set('formWaConsentLabel', 'form_wa_consent_label');
   set('otpHeading', 'otp_heading');
   set('otpSubtitleTemplate', 'otp_subtitle_template');
   set('otpEditDetailsLabel', 'otp_edit_details_label');

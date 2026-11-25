@@ -28,6 +28,7 @@ export async function syncRegistration(
       registeredAt: reg.createdAt,
       joinUrl: opts.joinUrl || reg.zoomJoinUrl || null,
       utm: opts.utm,
+      consent: reg.waConsent && reg.waConsentText ? { at: reg.waConsentAt ?? reg.createdAt, text: reg.waConsentText } : null,
     }, mc, event);
   } catch (err) {
     console.error('[mindbird] syncRegistration failed:', err);

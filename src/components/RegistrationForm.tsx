@@ -6,6 +6,7 @@ import { initBehaviourTracking, getBehaviourSnapshot } from "@/utils/trackBehavi
 import { INDIAN_CITIES, isValidCity } from "@/lib/indian-cities";
 import { validateName, validateEmail, validatePhone, normalizeEmail, normalizePhone } from "@/lib/form-validation";
 import QualificationChat from "./QualificationChat";
+import { waConsentLabel } from "@/lib/consent";
 
 // The query string doesn't change while the form is open — nothing to subscribe to.
 const noopSubscribe = () => () => {};
@@ -25,6 +26,8 @@ export interface RegistrationFormCopy {
   statusOptions?: string | null;      // newline-separated
   referralOptions?: string | null;    // newline-separated
   ctaButtonText?: string | null;
+  /** The WhatsApp marketing consent tick box's wording (Admin → Webinar). */
+  waConsentLabel?: string | null;
   otpFooterLabel?: string | null;
   otpHeading?: string | null;
   otpSubtitleTemplate?: string | null;
@@ -165,6 +168,9 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
     city: "",
     referralSource: "",
   });
+  // WhatsApp marketing consent (src/lib/consent.ts). Unticked by default and
+  // never required: leaving it empty still registers them.
+  const [waConsent, setWaConsent] = useState(false);
 
   const utmRef = useRef<any>({});
   const gclidRef = useRef<string | null>(null);
@@ -386,6 +392,8 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
           phone: normalizedPhone,
           city: normalizedCity,
           status: formData.status,
+          // The server records its own copy of the wording shown, not this.
+          waConsent,
           // Tagged visitors skip the question; record where the link said they came from.
           referralSource: arrivedViaTaggedLink
             ? `UTM: ${[utmRef.current.utm_source, utmRef.current.utm_medium].filter(Boolean).join(' / ')}`
@@ -824,6 +832,11 @@ export function RegistrationForm({ typeFilter = "PPC-SM", copy = {}, sessionCode
         </div>
         )}
       </div>
+      <label className="flex items-start gap-2.5 mt-3 cursor-pointer select-none">
+        <input type="checkbox" name="waConsent" checked={waConsent} onChange={e => setWaConsent(e.target.checked)}
+          className="mt-0.5 w-4 h-4 shrink-0 rounded border-gray-300 accent-[#00DF83]" />
+        <span className="text-[11px] leading-snug text-slate-500">{waConsentLabel(copy.waConsentLabel)}</span>
+      </label>
       {error && <p className="text-xs text-red-500">{error}</p>}
       <button type="submit" disabled={isLoading} className="w-full bg-[#00DF83] text-[#003368] font-bold py-4 rounded-xl shadow-lg shadow-[#00DF83]/20 mt-4 group">
         {isLoading ? <Loader2 className="animate-spin mx-auto" /> : <>{submitText} <span className="inline-block group-hover:translate-x-1 transition-transform">→</span></>}

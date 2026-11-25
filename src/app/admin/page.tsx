@@ -58,7 +58,7 @@ type WebinarConfig = {
   formLabelStatus: string | null; formLabelCity: string | null; formLabelReferral: string | null;
   formPlaceholderName: string | null; formPlaceholderEmail: string | null; formPlaceholderPhone: string | null;
   formPlaceholderSelect: string | null; formPlaceholderCity: string | null;
-  formStatusOptions: string | null; formReferralOptions: string | null;
+  formStatusOptions: string | null; formReferralOptions: string | null; formWaConsentLabel: string | null;
   otpHeading: string | null; otpSubtitleTemplate: string | null;
   otpEditDetailsLabel: string | null; otpVerifyButtonText: string | null;
   otpResendLabel: string | null; otpHelpText: string | null; otpHelpWhatsappNumber: string | null;
@@ -1891,6 +1891,7 @@ export default function AdminPortal() {
                   <WebinarSection title="Form Dropdown Options">
                     <TextField label="Status options (one per line)" value={webinar.formStatusOptions ?? ''} onChange={v => updateWebinarField('formStatusOptions', v)} rows={4} />
                     <TextField label="Referral options (one per line)" value={webinar.formReferralOptions ?? ''} onChange={v => updateWebinarField('formReferralOptions', v)} rows={5} />
+                    <TextField label="WhatsApp consent tick box (unticked by default; leave empty for the standard wording)" value={webinar.formWaConsentLabel ?? ''} onChange={v => updateWebinarField('formWaConsentLabel', v)} rows={3} />
                   </WebinarSection>
 
                   <WebinarSection title="OTP Verification Screen">
