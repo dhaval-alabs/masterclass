@@ -44,6 +44,19 @@ test("attended true/false reads yes/no; the session batch falls back to the titl
   assert.deepEqual(row.batches, ["Masterclass", "Masterclass · Excel to AI"]);
 });
 
+test("the admin table's other columns travel too: lead score, verified at, Zoom, duration, WhatsApp", () => {
+  const row = buildContactRow({ ...lead, verified: true, attended: true, leadScore: "hot", verifiedAt: "2026-11-17T08:36:00Z", zoomRegistered: true, attendMinutes: 74, waStatus: "sent" }, session);
+  assert.equal(row.attributes.mc_lead_score, "hot");
+  assert.equal(row.attributes.mc_verified_at, "2026-11-17T08:36:00.000Z");
+  assert.equal(row.attributes.mc_zoom_registered, "yes");
+  assert.equal(row.attributes.mc_attend_minutes, "74");
+  assert.equal(row.attributes.mc_wa_status, "sent");
+  // Unknown stays unsent, so a later push never blanks what an earlier one set.
+  const bare = buildContactRow(lead, session);
+  for (const k of ["mc_lead_score", "mc_verified_at", "mc_zoom_registered", "mc_attend_minutes", "mc_wa_status"]) assert.equal(k in bare.attributes, false, k);
+  assert.equal(buildContactRow({ ...lead, zoomRegistered: false, attendMinutes: 0 }, session).attributes.mc_zoom_registered, "no");
+});
+
 test("off unless MINDBIRD_SYNC_ENABLED=1 and the URL and key are set", async () => {
   await withEnv({ ...ON, MINDBIRD_SYNC_ENABLED: undefined }, () => assert.equal(mindbirdEnabled(), false));
   await withEnv({ ...ON, MINDBIRD_API_KEY: undefined }, () => assert.equal(mindbirdEnabled(), false));

@@ -42,7 +42,7 @@ async function all(table, columns, order) {
 
 const sessions = await all('webinar_sessions', 'id, code, title, date_label, datetime_utc, created_at', 'created_at');
 const sessionById = new Map(sessions.map(s => [s.id, { id: s.id, code: s.code, title: s.title, dateLabel: s.date_label, datetimeUtc: s.datetime_utc, sortAt: Date.parse(s.datetime_utc || s.created_at) || 0 }]));
-const regs = await all('registrations', 'id, full_name, email, phone, status, city, created_at, attended, session_id, zoom_join_url, current_status', 'created_at');
+const regs = await all('registrations', 'id, full_name, email, phone, status, city, created_at, attended, session_id, zoom_join_url, current_status, lead_score, verified_at, zoom_registered, attendance_duration_min, whatsapp_status', 'created_at');
 
 // 1. One row per (phone, session): Verified beats unverified; then the newest.
 const perSession = new Map();
@@ -75,6 +75,7 @@ for (const { r, session, phone } of [...perSession.values()].sort((a, b) => a.se
   const row = buildContactRow({
     phone, fullName: r.full_name, email: r.email, city: r.city, currentStatus: r.current_status,
     verified: r.status === 'Verified', attended: r.attended ?? null, registeredAt: r.created_at, joinUrl: r.zoom_join_url,
+    leadScore: r.lead_score, verifiedAt: r.verified_at, zoomRegistered: r.zoom_registered, attendMinutes: r.attendance_duration_min, waStatus: r.whatsapp_status,
   }, session);
   const prev = byPhone.get(phone);
   byPhone.set(phone, prev ? {

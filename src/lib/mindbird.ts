@@ -36,6 +36,13 @@ export interface McLead {
   utm?: { source?: string | null; medium?: string | null; campaign?: string | null };
   /** WhatsApp marketing consent from the form's tick box, with the wording shown. */
   consent?: { at: string; text: string } | null;
+  // The admin table's other columns, so Mindbird shows the same picture.
+  leadScore?: string | null;
+  verifiedAt?: string | null;
+  zoomRegistered?: boolean | null;
+  attendMinutes?: number | null;
+  /** The OTP message's WhatsApp state (pending / sent / failed / otp_disabled). */
+  waStatus?: string | null;
 }
 
 export interface McContactRow {
@@ -92,6 +99,11 @@ export function buildContactRow(lead: McLead, session: McSession): McContactRow 
     mc_utm_campaign: lead.utm?.campaign ?? "",
     // "yes" only: an unticked box must never look like a withdrawal.
     mc_wa_consent: lead.consent ? "yes" : "",
+    mc_lead_score: lead.leadScore ?? "",
+    mc_verified_at: isoOrEmpty(lead.verifiedAt),
+    mc_zoom_registered: lead.zoomRegistered === true ? "yes" : lead.zoomRegistered === false ? "no" : "",
+    mc_attend_minutes: typeof lead.attendMinutes === "number" && Number.isFinite(lead.attendMinutes) ? String(lead.attendMinutes) : "",
+    mc_wa_status: lead.waStatus ?? "",
   };
   // Mindbird keeps at most 500 characters per value. Empties are left out so a
   // later push never blanks a value an earlier one set — except the join link,

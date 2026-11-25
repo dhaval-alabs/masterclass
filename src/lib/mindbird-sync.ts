@@ -4,6 +4,11 @@
 import { getActiveWebinarSession, getWebinarSessionById, type Registration, type WebinarSession } from './db';
 import { attendanceEventAllowed, buildContactRow, mindbirdEnabled, pushMasterclassLeads, sendMindbirdEvent, syncLead, type McEvent, type McLead } from './mindbird';
 
+/** The admin table's other columns (lead score, verified at, Zoom, duration, WhatsApp). */
+function adminColumns(reg: Registration): Pick<McLead, 'leadScore' | 'verifiedAt' | 'zoomRegistered' | 'attendMinutes' | 'waStatus'> {
+  return { leadScore: reg.leadScore ?? null, verifiedAt: reg.verifiedAt ?? null, zoomRegistered: reg.zoomRegistered ?? null, attendMinutes: reg.attendanceDurationMin ?? null, waStatus: reg.whatsappStatus ?? null };
+}
+
 export async function syncRegistration(
   reg: Registration,
   opts: { event?: McEvent; utm?: McLead['utm']; joinUrl?: string | null; session?: WebinarSession | null } = {},
@@ -29,6 +34,7 @@ export async function syncRegistration(
       joinUrl: opts.joinUrl || reg.zoomJoinUrl || null,
       utm: opts.utm,
       consent: reg.waConsent && reg.waConsentText ? { at: reg.waConsentAt ?? reg.createdAt, text: reg.waConsentText } : null,
+      ...adminColumns(reg),
     }, mc, event);
   } catch (err) {
     console.error('[mindbird] syncRegistration failed:', err);
@@ -49,6 +55,7 @@ export async function syncAttendanceBulk(regs: Registration[], session: WebinarS
       phone: reg.phone, fullName: reg.fullName, email: reg.email, city: reg.city,
       currentStatus: reg.currentStatus ?? null, verified: reg.status === 'Verified',
       attended: reg.attended ?? null, registeredAt: reg.createdAt, joinUrl: reg.zoomJoinUrl ?? null,
+      ...adminColumns(reg),
     }, mc)).filter(r => r.phone.length >= 10);
     for (let i = 0; i < rows.length; i += 1000) {
       const r = await pushMasterclassLeads(rows.slice(i, i + 1000), { timeoutMs: 20_000 });
