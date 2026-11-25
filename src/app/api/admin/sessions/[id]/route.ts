@@ -17,6 +17,7 @@ import {
   type WebinarSession,
 } from '@/lib/db';
 import { mindbirdConfigured, pushSessionCreatives } from '@/lib/mindbird';
+import { refreshLandingPage } from '@/lib/refresh-lp';
 
 // Keep Mindbird's copy of this session's creatives in step (see mindbird.ts).
 // On ACTIVATE it is sent even with no images: it is what makes this session the
@@ -71,11 +72,13 @@ export async function PATCH(
       const session = await activateWebinarSession(id);
       logSessionAudit({ sessionId: id, adminEmail: admin.sub, action: 'activate', before, after: session, ip });
       syncCreativesLater(session, true);
+      refreshLandingPage();
       return NextResponse.json({ session });
     }
     if (action === 'end') {
       const session = await endWebinarSession(id);
       logSessionAudit({ sessionId: id, adminEmail: admin.sub, action: 'end', before, after: session, ip });
+      refreshLandingPage();
       return NextResponse.json({ session });
     }
     if (action === 'update') {
@@ -93,6 +96,7 @@ export async function PATCH(
       });
       logSessionAudit({ sessionId: id, adminEmail: admin.sub, action: 'update', before, after: session, ip });
       syncCreativesLater(session, false);
+      refreshLandingPage();
       return NextResponse.json({ session });
     }
 

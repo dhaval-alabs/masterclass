@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { getAgendaItems, replaceAgendaItems } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 import { assertSameOrigin } from '@/lib/security';
+import { refreshLandingPage } from '@/lib/refresh-lp';
 
 async function requireAdmin(): Promise<boolean> {
   const token = (await cookies()).get('admin_session')?.value;
@@ -31,6 +32,7 @@ export async function PUT(request: Request) {
       return NextResponse.json({ success: false, error: 'Too many agenda items (max 20)' }, { status: 400 });
     }
     const saved = await replaceAgendaItems(body);
+    refreshLandingPage();
     return NextResponse.json({ success: true, agendaItems: saved });
   } catch (error) {
     console.error('[Agenda PUT] error:', error);

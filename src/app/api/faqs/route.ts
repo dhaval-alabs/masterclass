@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { getFaqs, replaceFaqs } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 import { assertSameOrigin } from '@/lib/security';
+import { refreshLandingPage } from '@/lib/refresh-lp';
 
 async function requireAdmin(): Promise<boolean> {
   const token = (await cookies()).get('admin_session')?.value;
@@ -31,6 +32,7 @@ export async function PUT(request: Request) {
       return NextResponse.json({ success: false, error: 'Too many items (max 50)' }, { status: 400 });
     }
     const saved = await replaceFaqs(body);
+    refreshLandingPage();
     return NextResponse.json({ success: true, faqs: saved });
   } catch (error) {
     console.error('[FAQs PUT] error:', error);

@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { getSettings, updateSettings } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 import { assertSameOrigin } from '@/lib/security';
+import { refreshLandingPage } from '@/lib/refresh-lp';
 
 async function requireAdmin(): Promise<boolean> {
   const token = (await cookies()).get('admin_session')?.value;
@@ -28,6 +29,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const updated = await updateSettings(body);
+    refreshLandingPage();
     return NextResponse.json({ success: true, settings: updated });
   } catch (error) {
     console.error('[Settings POST] error:', error);

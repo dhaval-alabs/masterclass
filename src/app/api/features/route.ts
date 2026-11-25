@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { getFeatures, replaceFeatures } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 import { assertSameOrigin } from '@/lib/security';
+import { refreshLandingPage } from '@/lib/refresh-lp';
 
 async function requireAdmin(): Promise<boolean> {
   const token = (await cookies()).get('admin_session')?.value;
@@ -31,6 +32,7 @@ export async function PUT(request: Request) {
       return NextResponse.json({ success: false, error: 'Too many features (max 12)' }, { status: 400 });
     }
     const saved = await replaceFeatures(body);
+    refreshLandingPage();
     return NextResponse.json({ success: true, features: saved });
   } catch (error) {
     console.error('[Features PUT] error:', error);

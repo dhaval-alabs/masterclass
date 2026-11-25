@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { getWebinarConfig, updateWebinarConfig } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 import { assertSameOrigin } from '@/lib/security';
+import { refreshLandingPage } from '@/lib/refresh-lp';
 
 async function requireAdmin(): Promise<boolean> {
   const token = (await cookies()).get('admin_session')?.value;
@@ -31,6 +32,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Body must be a JSON object' }, { status: 400 });
     }
     const updated = await updateWebinarConfig(body);
+    refreshLandingPage();
     return NextResponse.json({ success: true, config: updated });
   } catch (error) {
     console.error('[Webinar POST] error:', error);
