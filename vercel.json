@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/score-unscored",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/retry-zoom",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

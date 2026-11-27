@@ -1112,6 +1112,20 @@ export async function updateZoomRegistration(
   if (error) throw error;
 }
 
+/**
+ * Verified registrations of a session with no Zoom join link (Zoom
+ * registration failed at verification), oldest first. See zoom-retry.ts.
+ */
+export async function getVerifiedWithoutZoomLink(sessionId: string, limit: number): Promise<Array<{ id: string; fullName: string; email: string; phone: string; city: string | null }>> {
+  const { data, error } = await client().from('registrations')
+    .select('id, full_name, email, phone, city')
+    .eq('session_id', sessionId).eq('status', 'Verified')
+    .or('zoom_join_url.is.null,zoom_join_url.eq.')
+    .order('created_at', { ascending: true }).limit(limit);
+  if (error) throw error;
+  return (data ?? []).map(r => ({ id: r.id as string, fullName: (r.full_name as string) ?? '', email: (r.email as string) ?? '', phone: (r.phone as string) ?? '', city: (r.city as string | null) ?? null }));
+}
+
 export async function getScoreBreakdownByCity(
   sessionId?: string | null,
 ): Promise<Array<{ city: string; hot: number; warm: number; cold: number; junk: number; total: number }>> {
