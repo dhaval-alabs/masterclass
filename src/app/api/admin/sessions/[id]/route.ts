@@ -16,7 +16,8 @@ import {
   setSessionCreatives,
   type WebinarSession,
 } from '@/lib/db';
-import { mindbirdConfigured, pushSessionCreatives } from '@/lib/mindbird';
+import { mindbirdConfigured, pushSessionCreatives, sessionMoved } from '@/lib/mindbird';
+import { syncSessionMoved } from '@/lib/mindbird-sync';
 import { refreshLandingPage } from '@/lib/refresh-lp';
 
 // Keep Mindbird's copy of this session's creatives in step (see mindbird.ts).
@@ -96,6 +97,9 @@ export async function PATCH(
       });
       logSessionAudit({ sessionId: id, adminEmail: admin.sub, action: 'update', before, after: session, ip });
       syncCreativesLater(session, false);
+      // Moved (time, date or title): Mindbird re-times the reminders queued for
+      // it, which otherwise went at the old times with the old date.
+      if (sessionMoved(before, session)) after(() => syncSessionMoved(session));
       refreshLandingPage();
       return NextResponse.json({ session });
     }

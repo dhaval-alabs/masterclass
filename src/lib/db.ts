@@ -2430,6 +2430,24 @@ export async function updateSpeakerSubmission(
  * If sessionId is null, returns rows that don't have any session_id either
  * (legacy / pre-sessions data).
  */
+/**
+ * Every registration of one session, verified or not, in pages: the database
+ * returns at most 1,000 rows per request whatever the query asks for, so a
+ * single select silently stopped at the 1,000th registrant.
+ */
+export async function getAllRegistrationsForSession(sessionId: string): Promise<Registration[]> {
+  const out: Registration[] = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await client().from('registrations').select('*')
+      .eq('session_id', sessionId).order('id', { ascending: true }).range(from, from + PAGE - 1);
+    if (error) throw error;
+    out.push(...(data ?? []).map(mapRegistration));
+    if ((data ?? []).length < PAGE) break;
+  }
+  return out;
+}
+
 export async function getVerifiedRegistrationsForAttendanceSync(
   sessionId: string | null,
 ): Promise<Registration[]> {

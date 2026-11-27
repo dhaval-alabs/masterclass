@@ -168,6 +168,39 @@ export async function syncLead(lead: McLead, session: McSession, event?: McEvent
   }
 }
 
+/**
+ * Did an edit change what the messages about a session say or when they go?
+ * Its time, its date label, or its title.
+ */
+export function sessionMoved(before: Pick<McSession, "title" | "dateLabel" | "datetimeUtc"> | null, after: Pick<McSession, "title" | "dateLabel" | "datetimeUtc">): boolean {
+  if (!before) return false;
+  return isoOrEmpty(before.datetimeUtc) !== isoOrEmpty(after.datetimeUtc)
+    || (before.dateLabel ?? "") !== (after.dateLabel ?? "")
+    || (before.title ?? "") !== (after.title ?? "");
+}
+
+/** The new values Mindbird writes into every message queued about this session. */
+export function sessionRetimeBody(session: McSession): { field: string; value: string; set: Record<string, string> } {
+  const set: Record<string, string> = {
+    mc_session_at: isoOrEmpty(session.datetimeUtc),
+    mc_session_date: (session.dateLabel ?? "").trim(),
+    mc_session_title: (session.title ?? "").trim(),
+  };
+  // A blank never overwrites: a reminder keeps its date rather than losing it.
+  for (const k of Object.keys(set)) if (!set[k]) delete set[k];
+  return { field: "mc_session_id", value: session.id ?? "", set };
+}
+
+/**
+ * The session moved: Mindbird re-times the reminders already queued for it
+ * (POST /api/events/retime) and queues ones the new time makes possible.
+ */
+export function retimeSessionMessages(session: McSession, opts: { timeoutMs?: number } = {}) {
+  const body = sessionRetimeBody(session);
+  if (!body.value || !Object.keys(body.set).length) return Promise.resolve({ ok: false, error: "session has no id or nothing to send" });
+  return post("/api/events/retime", body, opts.timeoutMs ?? 30_000);
+}
+
 const ATTENDANCE_EVENT_DAYS = 7;
 
 /**

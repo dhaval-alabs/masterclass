@@ -1,7 +1,7 @@
 // Run: node --test src/lib/mindbird.test.ts   (Node 24 strips the types)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toMindbirdPhone, buildContactRow, syncLead, mindbirdEnabled, cleanCreatives, creativeItems, missingImageTemplates, pushSessionCreatives, sessionCreativeStatus } from "./mindbird.ts";
+import { toMindbirdPhone, buildContactRow, syncLead, mindbirdEnabled, cleanCreatives, creativeItems, missingImageTemplates, pushSessionCreatives, sessionCreativeStatus, sessionMoved, sessionRetimeBody, retimeSessionMessages } from "./mindbird.ts";
 
 const session = { code: "EXL22", title: "Excel to AI", dateLabel: "22 Nov", datetimeUtc: "2026-11-22T13:30:00Z" };
 const lead = { phone: "+91 98765 43210", fullName: "Rahul Sharma", email: "r@x.in", city: "Pune", currentStatus: "Working professional", verified: false, attended: null, registeredAt: "2026-11-17T08:35:00Z", utm: { source: "meta", campaign: "B2_Excel" } };
@@ -210,6 +210,36 @@ test("the status says which templates the automatic messages use, and null from 
       assert.deepEqual(missingImageTemplates(r.ruleTemplates!.map(u => u.template), { default: null, templates: {} }), ["rem_48h"]);
       globalThis.fetch = (async () => new Response(JSON.stringify({ imageTemplates: ["rem_48h"], round: null }), { status: 200 })) as typeof fetch;
       assert.equal((await sessionCreativeStatus("8f1c-uuid")).ruleTemplates, null);
+    } finally { globalThis.fetch = orig; }
+  });
+});
+
+test("a session counts as moved when its time, date or title changes, and only then", () => {
+  const s = { title: "AI", dateLabel: "Sun, 13 December 2026", datetimeUtc: "2026-12-13T14:30:00Z" };
+  assert.equal(sessionMoved(s, { ...s }), false);
+  assert.equal(sessionMoved(s, { ...s, datetimeUtc: "2026-12-13T14:30:00.000Z" }), false);   // same moment, other spelling
+  assert.equal(sessionMoved(s, { ...s, datetimeUtc: "2026-12-15T14:30:00Z" }), true);
+  assert.equal(sessionMoved(s, { ...s, dateLabel: "Tue, 15 December 2026" }), true);
+  assert.equal(sessionMoved(s, { ...s, title: "AI 2" }), true);
+  assert.equal(sessionMoved(null, s), false);
+});
+
+test("a moved session asks Mindbird to re-time its queued messages, never blanking a value", async () => {
+  const moved = { id: "a86a", code: "W014", title: "AI", dateLabel: "Tue, 15 December 2026", datetimeUtc: "2026-12-15T14:30:00Z" };
+  assert.deepEqual(sessionRetimeBody(moved), {
+    field: "mc_session_id", value: "a86a",
+    set: { mc_session_at: "2026-12-15T14:30:00.000Z", mc_session_date: "Tue, 15 December 2026", mc_session_title: "AI" },
+  });
+  assert.deepEqual(sessionRetimeBody({ ...moved, dateLabel: null }).set, { mc_session_at: "2026-12-15T14:30:00.000Z", mc_session_title: "AI" });
+  await withEnv(CONNECTED, async () => {
+    const orig = globalThis.fetch;
+    let seen: { url: string; body: unknown } | null = null;
+    globalThis.fetch = (async (url: string, init: RequestInit) => { seen = { url, body: JSON.parse(String(init.body)) }; return new Response("{}", { status: 200 }); }) as typeof fetch;
+    try {
+      assert.equal((await retimeSessionMessages(moved)).ok, true);
+      assert.equal(seen!.url, "https://mb.test/api/events/retime");
+      assert.deepEqual(seen!.body, sessionRetimeBody(moved));
+      assert.equal((await retimeSessionMessages({ ...moved, id: null })).ok, false);   // no session id: nothing sent
     } finally { globalThis.fetch = orig; }
   });
 });

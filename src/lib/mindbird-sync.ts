@@ -1,8 +1,8 @@
 // A registration row → Mindbird (see mindbird.ts). Loads the row's session so
 // every caller sends the same complete picture: the routes only say which
 // registration changed and, when it matters, which event Mindbird should act on.
-import { getActiveWebinarSession, getRegistrationById, getWebinarSessionById, type Registration, type WebinarSession } from './db';
-import { attendanceEventAllowed, buildContactRow, mindbirdEnabled, pushMasterclassLeads, sendMindbirdEvent, syncLead, type McEvent, type McLead } from './mindbird';
+import { getActiveWebinarSession, getAllRegistrationsForSession, getRegistrationById, getWebinarSessionById, type Registration, type WebinarSession } from './db';
+import { attendanceEventAllowed, buildContactRow, mindbirdEnabled, pushMasterclassLeads, retimeSessionMessages, sendMindbirdEvent, syncLead, type McEvent, type McLead } from './mindbird';
 
 /** The admin table's other columns (lead score, verified at, Zoom, duration, WhatsApp). */
 function adminColumns(reg: Registration): Pick<McLead, 'leadScore' | 'verifiedAt' | 'zoomRegistered' | 'attendMinutes' | 'waStatus'> {
@@ -89,5 +89,34 @@ export async function syncAttendanceBulk(regs: Registration[], session: WebinarS
     }
   } catch (err) {
     console.error('[mindbird] syncAttendanceBulk failed:', err);
+  }
+}
+
+/**
+ * An admin moved a session (its time, date or title changed). Without this the
+ * reminders already queued in Mindbird went at the OLD times with the OLD date.
+ * Every registrant's details are sent again (no event: nobody is messaged for
+ * the resend itself), then Mindbird re-times what is queued for the session.
+ * Never throws.
+ */
+export async function syncSessionMoved(session: WebinarSession): Promise<void> {
+  if (!mindbirdEnabled()) return;
+  try {
+    const mc = { id: session.id, code: session.code, title: session.title, dateLabel: session.dateLabel, datetimeUtc: session.datetimeUtc };
+    const regs = await getAllRegistrationsForSession(session.id);
+    const rows = regs.map(reg => buildContactRow({
+      phone: reg.phone, fullName: reg.fullName, email: reg.email, city: reg.city,
+      currentStatus: reg.currentStatus ?? null, verified: reg.status === 'Verified',
+      attended: reg.attended ?? null, registeredAt: reg.createdAt, joinUrl: reg.zoomJoinUrl ?? null,
+      ...adminColumns(reg),
+    }, mc)).filter(r => r.phone.length >= 10);
+    for (let i = 0; i < rows.length; i += 1000) {
+      const r = await pushMasterclassLeads(rows.slice(i, i + 1000), { skipAutomations: true, timeoutMs: 20_000 });
+      if (!r.ok) console.error(`[mindbird] session-move push failed (${r.status ?? 'no response'}): ${r.error ?? ''}`);
+    }
+    const r = await retimeSessionMessages(mc);
+    if (!r.ok) console.error(`[mindbird] retime failed for session ${session.code}: ${'error' in r ? r.error ?? '' : ''}`);
+  } catch (err) {
+    console.error('[mindbird] syncSessionMoved failed:', err);
   }
 }
