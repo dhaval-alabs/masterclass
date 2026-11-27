@@ -298,11 +298,18 @@ export async function pushSessionCreatives(
   return { at, ok: items.every(i => i.status !== "refused"), items };
 }
 
-/** What Mindbird holds for a session, and its image templates. Never throws. */
-export async function sessionCreativeStatus(sessionId: string): Promise<{ ok: boolean; error?: string; imageTemplates?: string[]; held?: { template: string | null; imageUrl: string }[] }> {
+/** A template the automatic WhatsApp messages send with these images, and which rules send it. */
+export type RuleTemplate = { template: string; rules: { name: string; active: boolean }[] };
+
+/**
+ * What Mindbird holds for a session, its image templates, and which of them the
+ * automatic messages use (ruleTemplates; null from a Mindbird too old to say,
+ * in which case every image template is treated as used). Never throws.
+ */
+export async function sessionCreativeStatus(sessionId: string): Promise<{ ok: boolean; error?: string; imageTemplates?: string[]; ruleTemplates?: RuleTemplate[] | null; held?: { template: string | null; imageUrl: string }[] }> {
   if (!mindbirdConfigured()) return { ok: false, error: "Mindbird is not connected." };
   const r = await call("GET", `/api/creatives?set=${CREATIVE_SET}&ref=${encodeURIComponent(sessionId)}`, undefined, 15_000);
   if (!r.ok) return { ok: false, error: r.error };
-  const j = (r.json ?? {}) as { imageTemplates?: string[]; round?: { items?: { template: string | null; imageUrl: string }[] } | null };
-  return { ok: true, imageTemplates: j.imageTemplates ?? [], held: j.round?.items ?? [] };
+  const j = (r.json ?? {}) as { imageTemplates?: string[]; ruleTemplates?: RuleTemplate[]; round?: { items?: { template: string | null; imageUrl: string }[] } | null };
+  return { ok: true, imageTemplates: j.imageTemplates ?? [], ruleTemplates: Array.isArray(j.ruleTemplates) ? j.ruleTemplates : null, held: j.round?.items ?? [] };
 }

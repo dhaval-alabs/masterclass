@@ -12,7 +12,15 @@ import { uploadAdminFile } from "@/lib/admin-upload";
 type Item = { template: string | null; status: "stored" | "unchanged" | "refused"; imageUrl?: string; reason?: string; warning?: string; keptPrevious?: boolean };
 type Sync = { at: string; ok: boolean; error?: string; items?: Item[] } | null;
 type Creatives = { default: string | null; templates: Record<string, string> };
-type Data = { connected: boolean; mindbirdError: string | null; creatives: Creatives; sync: Sync; imageTemplates: string[]; missing: string[] };
+type RuleTemplate = { template: string; rules: { name: string; active: boolean }[] };
+// ruleTemplates: the templates the automatic messages send with these images
+// (null from a Mindbird too old to say: then every image template counts).
+type Data = { connected: boolean; mindbirdError: string | null; creatives: Creatives; sync: Sync; imageTemplates: string[]; ruleTemplates: RuleTemplate[] | null; missing: string[] };
+
+// "Masterclass · 48h reminder" → "48h reminder", "(off)" when the rule is off.
+function sentBy(u: RuleTemplate): string {
+  return "Sent by: " + u.rules.map(r => r.name.replace(/^Masterclass\s*·\s*/i, "") + (r.active ? "" : " (off)")).join(", ") + ".";
+}
 
 const MAX_BYTES = 5 * 1024 * 1024;
 
@@ -79,6 +87,7 @@ export default function SessionCreativesModal({ session, onClose }: { session: {
   const [error, setError] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [showOthers, setShowOthers] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -124,8 +133,15 @@ export default function SessionCreativesModal({ session, onClose }: { session: {
   }
 
   const results = new Map((data?.sync?.items ?? []).map(i => [key(i.template), i]));
-  const templates = data ? [...new Set([...data.imageTemplates, ...Object.keys(draft.templates)])] : [];
-  const missing = data ? (draft.default ? [] : data.imageTemplates.filter(t => !draft.templates[t])) : [];
+  // Shown first: what the automatic messages send, plus anything that already
+  // has its own image. The other image templates on the numbers are only needed
+  // for a broadcast that uses them, and the default image covers them, so they
+  // stay folded away.
+  const used = new Map((data?.ruleTemplates ?? []).map(u => [u.template, u]));
+  const required = data ? (data.ruleTemplates ? data.ruleTemplates.map(u => u.template) : data.imageTemplates) : [];
+  const templates = data ? [...new Set([...required, ...Object.keys(draft.templates)])] : [];
+  const others = data ? data.imageTemplates.filter(t => !templates.includes(t)) : [];
+  const missing = data ? (draft.default ? [] : required.filter(t => !draft.templates[t])) : [];
   const changed = data ? JSON.stringify(draft) !== JSON.stringify(data.creatives) : false;
 
   return (
@@ -151,13 +167,13 @@ export default function SessionCreativesModal({ session, onClose }: { session: {
 
           {data && (missing.length
             ? <p className="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-3 flex gap-2"><AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>Not ready: {missing.length} image template{missing.length === 1 ? " has" : "s have"} no image ({missing.join(", ")}). Messages using {missing.length === 1 ? "it" : "them"} will not be sent. Add {missing.length === 1 ? "its image" : "their images"} or a default image.</span></p>
+                <span>Not ready: {missing.length} template{missing.length === 1 ? "" : "s"} used by the automatic messages {missing.length === 1 ? "has" : "have"} no image ({missing.join(", ")}). Messages using {missing.length === 1 ? "it" : "them"} will not be sent. Add a default image (it covers all of them), or one per template.</span></p>
             : <p className="text-sm bg-[#00DF83]/10 border border-[#00DF83]/30 text-[#00663f] rounded-lg p-3 flex gap-2"><CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>Ready: every image template has an image{draft.default ? " (the default covers any without their own)" : ""}.</span></p>)}
+                <span>Ready: every automatic message has an image{draft.default ? " (the default covers any template without its own)" : ""}.</span></p>)}
 
           {data && (
             <>
-              <Slot label="Default image" sub="Used by any image template without its own image below." url={draft.default}
+              <Slot label="Default image" sub="Used by every template without its own image below. One image here is enough for all the messages." url={draft.default}
                 result={results.get(key(null))} busy={!!busy}
                 onUpload={f => upload(null, f)} onRemove={() => setUrl(null, null)} />
               {notes[key(null)] && <p className="text-xs text-amber-700 -mt-2">{notes[key(null)]}</p>}
@@ -165,7 +181,25 @@ export default function SessionCreativesModal({ session, onClose }: { session: {
               {templates.map(t => (
                 <div key={t}>
                   <Slot label={t}
-                    sub={data.imageTemplates.includes(t) ? "Template with an image header." : "Not an approved image template any more: this image is no longer used."}
+                    sub={!data.imageTemplates.includes(t) ? "Not an approved image template any more: this image is no longer used."
+                      : used.has(t) ? sentBy(used.get(t)!) : "Template with an image header."}
+                    url={draft.templates[t] ?? null} result={results.get(t)} busy={!!busy}
+                    onUpload={f => upload(t, f)} onRemove={() => setUrl(t, null)} />
+                  {notes[t] && <p className="text-xs text-amber-700 mt-1">{notes[t]}</p>}
+                </div>
+              ))}
+              {others.length > 0 && (
+                <div className="pt-1">
+                  <button type="button" onClick={() => setShowOthers(v => !v)}
+                    className="text-xs font-semibold text-[#003368] hover:underline">
+                    {showOthers ? "Hide" : "Show"} {others.length} other image template{others.length === 1 ? "" : "s"}
+                  </button>
+                  <p className="text-xs text-slate-500 mt-0.5">Not used by the automatic messages. Only needed if you broadcast with one of them, and the default image covers them.</p>
+                </div>
+              )}
+              {showOthers && others.map(t => (
+                <div key={t}>
+                  <Slot label={t} sub="Template with an image header."
                     url={draft.templates[t] ?? null} result={results.get(t)} busy={!!busy}
                     onUpload={f => upload(t, f)} onRemove={() => setUrl(t, null)} />
                   {notes[t] && <p className="text-xs text-amber-700 mt-1">{notes[t]}</p>}

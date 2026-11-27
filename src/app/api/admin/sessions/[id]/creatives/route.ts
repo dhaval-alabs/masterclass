@@ -23,13 +23,18 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
   const status = await sessionCreativeStatus(id);
   const imageTemplates = status.imageTemplates ?? [];
+  // The ones the automatic messages send: those must have an image or the
+  // message is not sent. Older Mindbird without the list: treat all as used.
+  const ruleTemplates = status.ruleTemplates ?? null;
+  const required = ruleTemplates ? ruleTemplates.map(u => u.template) : imageTemplates;
   return NextResponse.json({
     connected: mindbirdConfigured(),
     mindbirdError: status.ok ? null : status.error,
     creatives: session.waCreatives,
     sync: session.waCreativesSync,
     imageTemplates,
-    missing: missingImageTemplates(imageTemplates, session.waCreatives),
+    ruleTemplates,
+    missing: missingImageTemplates(required, session.waCreatives),
     held: status.held ?? [],
   });
 }

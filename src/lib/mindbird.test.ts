@@ -196,3 +196,20 @@ test("an empty box sends no consent at all, and never a 'no' that could read as 
   assert.equal(row.consent, undefined);
   assert.equal(row.attributes.mc_wa_consent, undefined);
 });
+
+test("the status says which templates the automatic messages use, and null from an older Mindbird", async () => {
+  await withEnv(CONNECTED, async () => {
+    const orig = globalThis.fetch;
+    try {
+      const used = [{ template: "rem_48h", rules: [{ name: "Masterclass · 48h reminder", active: true }] }];
+      globalThis.fetch = (async () => new Response(JSON.stringify({ imageTemplates: ["rem_48h", "old_promo"], ruleTemplates: used, round: null }), { status: 200 })) as typeof fetch;
+      const r = await sessionCreativeStatus("8f1c-uuid");
+      assert.deepEqual(r.ruleTemplates, used);
+      assert.deepEqual(r.imageTemplates, ["rem_48h", "old_promo"]);
+      // Only the used template has to have an image.
+      assert.deepEqual(missingImageTemplates(r.ruleTemplates!.map(u => u.template), { default: null, templates: {} }), ["rem_48h"]);
+      globalThis.fetch = (async () => new Response(JSON.stringify({ imageTemplates: ["rem_48h"], round: null }), { status: 200 })) as typeof fetch;
+      assert.equal((await sessionCreativeStatus("8f1c-uuid")).ruleTemplates, null);
+    } finally { globalThis.fetch = orig; }
+  });
+});
