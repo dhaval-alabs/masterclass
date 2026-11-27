@@ -34,11 +34,8 @@ export interface ThankYouCopy {
   subCopy?: string | null;
   confirmationTemplate?: string | null;       // supports {email}
   webinarTitlePersonal?: string | null;
-  webinarTitleDefault?: string | null;
   webinarBodyPersonal?: string | null;
-  webinarBodyDefault?: string | null;
   webinarCtaPersonal?: string | null;
-  webinarCtaDefault?: string | null;
   phoneTitle?: string | null;
   phoneBody?: string | null;
   phoneCta?: string | null;
@@ -65,7 +62,14 @@ interface ThankYouProps {
   copy?: ThankYouCopy;
 }
 
-const WEBINAR_URL = process.env.NEXT_PUBLIC_ZOOM_WEBINAR_URL || 'https://us06web.zoom.us/webinar/register/7517736425815/WN_MwlIZpQCRcmKz_LG4Y3OwQ';
+// One-click join: a registrant only ever gets their PERSONAL Zoom link (from
+// Zoom's registrant API at verification), which opens the session directly.
+// There is deliberately no fallback to a Zoom registration page: that was a
+// second sign-up form, and the hard-coded one pointed at an old webinar. When
+// Zoom registration failed, the link is retried every 15 minutes
+// (zoom-retry.ts) and arrives on WhatsApp.
+export const LINK_PENDING_TITLE = 'Your join link is on its way';
+export const LINK_PENDING_BODY = "We're finishing your Zoom registration. Your personal join link will reach you on WhatsApp shortly. One tap and you're in, no form to fill.";
 const FALLBACK_BROCHURE_PDF_URL = process.env.NEXT_PUBLIC_BROCHURE_URL || 'https://www.analytixlabs.co.in/pdf/Nasscom_(ACDS)_Advanced_Certification_in_Data_Science_Alabs280126.pdf';
 const FALLBACK_PHONE_NUMBER = '919555525908';
 const FALLBACK_WA_MESSAGE = 'Hello, I just submitted my details on the AnalytixLabs website. Can you help me?';
@@ -79,11 +83,8 @@ export default function ThankYouPage({ heading: headingProp, subCopy: subCopyPro
   const subCopy                = copy.subCopy              ?? subCopyProp ?? 'Your spot for the upcoming masterclass is confirmed. Check your email for joining details.';
   const confirmationTpl        = copy.confirmationTemplate ?? 'Confirmation sent to: {email}';
   const webinarTitlePersonal   = copy.webinarTitlePersonal ?? 'Your Webinar Access';
-  const webinarTitleDefault    = copy.webinarTitleDefault  ?? 'Upcoming Webinar';
   const webinarBodyPersonal    = copy.webinarBodyPersonal  ?? "You're confirmed. Click below to join your masterclass when it begins — no extra signup needed.";
-  const webinarBodyDefault     = copy.webinarBodyDefault   ?? 'Expert guidance on building a career in Data Science. Free access.';
   const webinarCtaPersonal     = copy.webinarCtaPersonal   ?? 'Join Webinar →';
-  const webinarCtaDefault      = copy.webinarCtaDefault    ?? 'Save My Spot →';
   const phoneTitle             = copy.phoneTitle           ?? 'Need Help? Talk to Us';
   const phoneBody              = copy.phoneBody            ?? 'Advisors available Mon–Sat, 9 AM to 7 PM.';
   const phoneCta               = copy.phoneCta             ?? 'Call 95555 25908';
@@ -113,8 +114,7 @@ export default function ThankYouPage({ heading: headingProp, subCopy: subCopyPro
   const email = decodeURIComponent(rawEmail);
   const name = decodeURIComponent(rawName);
 
-  const effectiveWebinarUrl = personalZoomUrl || WEBINAR_URL;
-  const hasPersonalZoom = personalZoomUrl.length > 0;
+  const hasPersonalZoom = /^https:\/\/([a-z0-9-]+\.)*zoom\.us\//i.test(personalZoomUrl);
 
   // Resolve per-course brochure URL from env vars if slug is present and known
   const courseBrochureUrl = courseSlug ? COURSE_BROCHURE_URLS[courseSlug] || null : null;
@@ -279,13 +279,15 @@ export default function ThankYouPage({ heading: headingProp, subCopy: subCopyPro
           {/* Card 1 — Webinar */}
           <div style={cardStyle}>
             <div style={iconStyle}>🎥</div>
-            <h3 style={cardTitle}>{hasPersonalZoom ? webinarTitlePersonal : webinarTitleDefault}</h3>
+            <h3 style={cardTitle}>{hasPersonalZoom ? webinarTitlePersonal : LINK_PENDING_TITLE}</h3>
             <p style={cardBody}>
-              {hasPersonalZoom ? webinarBodyPersonal : webinarBodyDefault}
+              {hasPersonalZoom ? webinarBodyPersonal : LINK_PENDING_BODY}
             </p>
-            <a href={effectiveWebinarUrl} target="_blank" rel="noopener noreferrer" style={btnPrimary}>
-              {hasPersonalZoom ? webinarCtaPersonal : webinarCtaDefault}
-            </a>
+            {hasPersonalZoom && (
+              <a href={personalZoomUrl} target="_blank" rel="noopener noreferrer" style={btnPrimary}>
+                {webinarCtaPersonal}
+              </a>
+            )}
           </div>
 
           {/* Card 2 — Phone */}

@@ -1918,18 +1918,11 @@ export default function AdminPortal() {
                     <Field label="Confirmation pill (use {email} for placeholder)" value={webinar.thankyouConfirmationTemplate ?? ''} onChange={v => updateWebinarField('thankyouConfirmationTemplate', v)} placeholder="Confirmation sent to: {email}" />
                   </WebinarSection>
 
-                  <WebinarSection title="Thank-You Page — Webinar Card (2 variants)">
-                    <p className="text-xs text-slate-500 -mt-1 mb-3">"Personal" variant shows when the user got a personal Zoom URL after OTP. "Default" shows otherwise.</p>
-                    <div className="grid grid-cols-2 gap-3">
-                      <Field label="Title (personal)" value={webinar.thankyouWebinarTitlePersonal ?? ''} onChange={v => updateWebinarField('thankyouWebinarTitlePersonal', v)} placeholder="Your Webinar Access" />
-                      <Field label="Title (default)"  value={webinar.thankyouWebinarTitleDefault  ?? ''} onChange={v => updateWebinarField('thankyouWebinarTitleDefault',  v)} placeholder="Upcoming Webinar" />
-                    </div>
-                    <TextField label="Body (personal)" value={webinar.thankyouWebinarBodyPersonal ?? ''} onChange={v => updateWebinarField('thankyouWebinarBodyPersonal', v)} rows={3} />
-                    <TextField label="Body (default)"  value={webinar.thankyouWebinarBodyDefault  ?? ''} onChange={v => updateWebinarField('thankyouWebinarBodyDefault',  v)} rows={3} />
-                    <div className="grid grid-cols-2 gap-3">
-                      <Field label="CTA (personal)" value={webinar.thankyouWebinarCtaPersonal ?? ''} onChange={v => updateWebinarField('thankyouWebinarCtaPersonal', v)} placeholder="Join Webinar →" />
-                      <Field label="CTA (default)"  value={webinar.thankyouWebinarCtaDefault  ?? ''} onChange={v => updateWebinarField('thankyouWebinarCtaDefault',  v)} placeholder="Save My Spot →" />
-                    </div>
+                  <WebinarSection title="Thank-You Page — Webinar Card">
+                    <p className="text-xs text-slate-500 -mt-1 mb-3">Shown with the registrant&apos;s personal Zoom link, which opens the session in one click, no second sign-up. If Zoom registration failed, the card says the link is on its way on WhatsApp instead (it is retried every 15 minutes) and has no button.</p>
+                    <Field label="Title" value={webinar.thankyouWebinarTitlePersonal ?? ''} onChange={v => updateWebinarField('thankyouWebinarTitlePersonal', v)} placeholder="Your Webinar Access" />
+                    <TextField label="Body" value={webinar.thankyouWebinarBodyPersonal ?? ''} onChange={v => updateWebinarField('thankyouWebinarBodyPersonal', v)} rows={3} />
+                    <Field label="Button" value={webinar.thankyouWebinarCtaPersonal ?? ''} onChange={v => updateWebinarField('thankyouWebinarCtaPersonal', v)} placeholder="Join Webinar →" />
                   </WebinarSection>
 
                   <WebinarSection title="Thank-You Page — Phone Card">
