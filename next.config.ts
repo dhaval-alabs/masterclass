@@ -1,5 +1,13 @@
 import type { NextConfig } from "next";
 
+// Admin uploads (hero, features, partnership images) are served from the
+// Supabase project's public storage. Take its host from the same env var the
+// app uses, so moving to a new Supabase project can't leave next/image
+// refusing the new host (as happened after the move off qhgelnkakutzbuvowxzj).
+const supabaseHost = (() => {
+  try { return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').hostname; } catch { return ''; }
+})() || 'tqtqywzqywwjacurbngz.supabase.co';
+
 const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
@@ -17,7 +25,7 @@ const nextConfig: NextConfig = {
       },
       {
         protocol: 'https',
-        hostname: 'qhgelnkakutzbuvowxzj.supabase.co',
+        hostname: supabaseHost,
         pathname: '/storage/v1/object/public/**',
       },
     ],
