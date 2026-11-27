@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import WhatsAppProfilePanel from "./WhatsAppProfilePanel";
 import { formatIst } from "@/lib/ist";
+import { uploadAdminFile } from "@/lib/admin-upload";
 
 type Audience = "verified" | "unverified" | "all";
 
@@ -863,12 +864,7 @@ export default function WhatsAppTab() {
     setHeaderUploadError(null);
     setIsUploadingHeader(true);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const data = await readJson(res);
-      if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`);
-      setHeaderImageUrl(data.url);
+      setHeaderImageUrl(await uploadAdminFile(file));
     } catch (err) {
       setHeaderUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally { setIsUploadingHeader(false); }

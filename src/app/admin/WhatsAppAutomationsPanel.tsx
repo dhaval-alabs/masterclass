@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Loader2, Zap, Check, Plus, Trash2 } from "lucide-react";
+import { uploadAdminFile } from "@/lib/admin-upload";
 
 type Trigger =
   | "unverified" | "verified" | "noshow"
@@ -155,12 +156,7 @@ export default function WhatsAppAutomationsPanel() {
   async function uploadHeader(t: Trigger, file: File) {
     patch(t, { uploading: true, uploadError: null });
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || `Upload failed (HTTP ${res.status})`);
-      patch(t, { headerImageUrl: data.url, uploading: false });
+      patch(t, { headerImageUrl: await uploadAdminFile(file), uploading: false });
     } catch (err) {
       patch(t, { uploading: false, uploadError: err instanceof Error ? err.message : "Upload failed" });
     }

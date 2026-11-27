@@ -12,6 +12,7 @@ import AnalyticsTab from "./AnalyticsTab";
 import BroadcastTab from "./BroadcastTab";
 import SpeakerSubmissionsTab from "./SpeakerSubmissionsTab";
 import { fromIstPicker, toIstPickerValue, formatIst } from "@/lib/ist";
+import { uploadAdminFile } from "@/lib/admin-upload";
 
 type FaqItem = { id: string; q: string; a: string; order: number };
 type FeatureItem = { id: string; icon: string | null; title: string; description: string; accent: string | null; sortOrder: number };
@@ -758,25 +759,16 @@ export default function AdminPortal() {
     setIsUploading(true);
     setSaveMessage("");
 
-    const formData = new FormData();
-    formData.append("file", e.target.files[0]);
-
+    const input = e.target;
     try {
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSettings({ ...settings, speakerImage: data.url });
-        setSaveMessage("Image uploaded successfully! (Don't forget to save changes)");
-      } else {
-        setSaveMessage(data.error || "Failed to upload image.");
-      }
+      const url = await uploadAdminFile(input.files![0]);
+      setSettings({ ...settings, speakerImage: url });
+      setSaveMessage("Image uploaded successfully! (Don't forget to save changes)");
     } catch (err) {
-      setSaveMessage("Error uploading image.");
+      setSaveMessage(err instanceof Error ? err.message : "Error uploading image.");
     } finally {
       setIsUploading(false);
+      input.value = "";
     }
   };
 
@@ -788,13 +780,10 @@ export default function AdminPortal() {
     if (!file) return;
     setUploadingField(field as string);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await fetch('/api/upload', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (res.ok && data.url) updateWebinarField(field, data.url as WebinarConfig[typeof field]);
-    } catch {
-      /* surfaced via no-op; user can retry */
+      const url = await uploadAdminFile(file);
+      updateWebinarField(field, url as WebinarConfig[typeof field]);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Upload failed.');
     } finally {
       setUploadingField(null);
       e.target.value = '';

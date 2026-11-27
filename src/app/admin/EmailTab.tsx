@@ -10,6 +10,7 @@ import {
 import Image from "next/image";
 import EmailBuilder from "./EmailBuilder";
 import { formatIst } from "@/lib/ist";
+import { uploadAdminFile } from "@/lib/admin-upload";
 
 type Audience = "verified" | "unverified" | "all";
 
@@ -222,16 +223,10 @@ function EmailBrandingCard({
 
   const uploadLogo = async (file: File) => {
     if (!file.type.startsWith("image/")) { setFeedback({ kind: "err", text: "Only image files." }); return; }
-    if (file.size > 5 * 1024 * 1024) { setFeedback({ kind: "err", text: "Max 5 MB." }); return; }
     setUploading(true);
     setFeedback(null);
-    const fd = new FormData();
-    fd.append("file", file);
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
-      update({ logoUrl: data.url });
+      update({ logoUrl: await uploadAdminFile(file) });
     } catch (err) {
       setFeedback({ kind: "err", text: err instanceof Error ? err.message : "Upload failed" });
     } finally { setUploading(false); }
@@ -829,16 +824,10 @@ export default function EmailTab() {
   // ── Upload ──────────────────────────────────────────────────────────────
   const uploadFile = useCallback(async (file: File) => {
     if (!file.type.startsWith("image/")) { setBannerError("Only image files are allowed."); return; }
-    if (file.size > 5 * 1024 * 1024) { setBannerError("Image must be under 5 MB."); return; }
     setIsUploadingBanner(true);
     setBannerError(null);
-    const formData = new FormData();
-    formData.append("file", file);
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
-      setBannerUrl(data.url);
+      setBannerUrl(await uploadAdminFile(file));
     } catch (err) {
       setBannerError(err instanceof Error ? err.message : "Upload failed");
     } finally {

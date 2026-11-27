@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { X, Upload, Loader2, CheckCircle2, AlertTriangle, RefreshCw, Trash2, ImageIcon } from "lucide-react";
+import { uploadAdminFile } from "@/lib/admin-upload";
 
 type Item = { template: string | null; status: "stored" | "unchanged" | "refused"; imageUrl?: string; reason?: string; warning?: string; keptPrevious?: boolean };
 type Sync = { at: string; ok: boolean; error?: string; items?: Item[] } | null;
@@ -104,11 +105,7 @@ export default function SessionCreativesModal({ session, onClose }: { session: {
     if (pre.error) return;
     setBusy(key(t));
     try {
-      const fd = new FormData(); fd.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const j = await res.json();
-      if (!res.ok || !j.url) throw new Error(j.error || "Upload failed");
-      setUrl(t, j.url);
+      setUrl(t, await uploadAdminFile(file));
     } catch (e) { setNotes(n => ({ ...n, [key(t)]: e instanceof Error ? e.message : "Upload failed" })); }
     finally { setBusy(null); }
   }

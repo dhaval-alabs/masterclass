@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Loader2, MessageSquare, Mail, Users, ListChecks, Send, Clock, CheckCircle2, AlertCircle, Info, Search, RefreshCw, Plus, Trash2, ExternalLink } from "lucide-react";
 import WhatsAppAutomationsPanel from "./WhatsAppAutomationsPanel";
+import { uploadAdminFile } from "@/lib/admin-upload";
 
 type Channel = "whatsapp" | "email";
 type TargetMode = "audience" | "recipients";
@@ -185,15 +186,7 @@ export default function BroadcastTab() {
     setHeaderUploadError(null);
     setIsUploadingHeader(true);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      // 401 comes back as plain text, not JSON — parsing it was the
-      // 'Unexpected token 'U'' error. Say what actually happened.
-      if (res.status === 401) throw new Error("Your admin login has expired. Log in again in a new tab, then upload again.");
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`);
-      setHeaderImageUrl(data.url);
+      setHeaderImageUrl(await uploadAdminFile(file));
     } catch (err) {
       setHeaderUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally {
